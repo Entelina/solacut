@@ -1,0 +1,53 @@
+{
+  "video_path": "input/demo_highlight_30s.mp4",
+  "language": "en",
+  "asr_provider": "demo",
+  "asr_model": "demo-preset",
+  "mode": "peaks",
+  "total_duration_sec": 30.0,
+  "segment_count": 6,
+  "segments": [
+    {
+      "start_sec": 3.2,
+      "end_sec": 6.4,
+      "text": "Where Winds Meet sucked me in so bad!",
+      "is_high_volume": true,
+      "peak_rms": 0.35
+    },
+    {
+      "start_sec": 6.6,
+      "end_sec": 10.2,
+      "text": "God forbid a girl has hobbies, chat!",
+      "is_high_volume": true,
+      "peak_rms": 0.33
+    },
+    {
+      "start_sec": 10.4,
+      "end_sec": 13.6,
+      "text": "Wait, hold on, we are actually so back!",
+      "is_high_volume": true,
+      "peak_rms": 0.31
+    },
+    {
+      "start_sec": 17.4,
+      "end_sec": 20.8,
+      "text": "One HP clutch! No way I just parried that!",
+      "is_high_volume": true,
+      "peak_rms": 0.41
+    },
+    {
+      "start_sec": 21.0,
+      "end_sec": 24.4,
+      "text": "Let him cook! That boss just got deleted!",
+      "is_high_volume": true,
+      "peak_rms": 0.38
+    },
+    {
+      "start_sec": 24.6,
+      "end_sec": 27.6,
+      "text": "Clip that right now, absolute cinema!",
+      "is_high_volume": true,
+      "peak_rms": 0.36
+    }
+  ]
+}

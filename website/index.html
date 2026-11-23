@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#090A0D">
+  <title>Solacut — 原生 Windows 游戏高光切片与六语种母语级精翻工作台</title>
+  <meta name="description" content="Solacut 是面向游戏切片师、跨语种主播、字幕组与视频创作者的原生 Windows 专业 NLE 工作台。OBS 纯人声带通高光定位、60 万条六语种本地 FTS5 语料与三道零漏翻闭环，零上传纯本地运行。">
+  <link rel="canonical" href="https://solacut.com/">
+  <link rel="icon" type="image/x-icon" href="/brand/favicon.ico">
+  <link rel="icon" type="image/png" sizes="128x128" href="/brand/logo-128.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="/brand/logo-512.png">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Solacut">
+  <meta property="og:url" content="https://solacut.com/">
+  <meta property="og:title" content="Solacut — 从冗长录屏中，精准切出高光与母语级字幕">
+  <meta property="og:description" content="原生 Windows 达芬奇级暗房 NLE 切片与六语种 60 万语料母语级精翻工作台。200-3400Hz 纯人声带通、三道零漏翻闭环、无损直切与 CMX 3600 EDL 回迁。">
+  <meta property="og:image" content="https://solacut.com/brand/logo-512.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Solacut — 原生 Windows 游戏高光切片与六语种母语级精翻工作台">
+  <meta name="twitter:description" content="600,000 条六语种本地 FTS5 语料 · 三道零漏翻闭环 · < 15 ms 本地 RAG · 0 字节素材上传。">
+  <meta name="twitter:image" content="https://solacut.com/brand/logo-512.png">
+</head>
+<body>
+  <a class="skip-link visually-hidden" href="#main-content">跳至正文</a>
+
+  <!-- 1. 顶部 56px Sticky 哑光黑精密导航栏 -->
+  <header class="site-header">
+    <div class="container site-header-inner">
+      <a class="brand-link" href="#top" aria-label="Solacut 返回顶部">
+        <img
+          src="/brand/logo-128.png"
+          alt=""
+          width="28"
+          height="28"
+          class="brand-logo"
+          decoding="async"
+        >
+        <span class="brand-wordmark" data-site-brand>Solacut</span>
+        <span class="brand-version mono" data-site-version-short>v0.9 Beta</span>
+      </a>
+
+      <nav class="site-nav" aria-label="主导航">
+        <ul class="nav-links">
+          <li><a class="nav-link" href="#workbench">工作台</a></li>
+          <li><a class="nav-link" href="#translation">母语译核</a></li>
+          <li><a class="nav-link" href="#specs">架构规格</a></li>
+          <li><a class="nav-link" href="#download">安全下载</a></li>
+        </ul>
+      </nav>
+
+      <div class="header-actions">
+        <a
+          class="btn btn-ghost btn-sm header-github-link"
+          href="https://github.com/Entelina/solacut"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-site-repo
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6.2 12.6c-2.6.8-2.6-1.3-3.7-1.6m7.4 3.2v-2.1a1.9 1.9 0 0 0-.5-1.5c1.7-.2 3.5-.8 3.5-3.8a3 3 0 0 0-.8-2.1 2.8 2.8 0 0 0-.1-2.1s-.7-.2-2.2.8a7.6 7.6 0 0 0-4 0c-1.5-1-2.2-.8-2.2-.8a2.8 2.8 0 0 0-.1 2.1 3 3 0 0 0-.8 2.1c0 3 1.8 3.6 3.5 3.8a1.9 1.9 0 0 0-.5 1.5v2.1"/>
+          </svg>
+          <span>GitHub</span>
+        </a>
+
+        <a class="btn btn-primary btn-sm" href="#download">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 2.5v7.8m0 0-3-3m3 3 3-3M2.8 13h10.4"/>
+          </svg>
+          <span class="header-cta-label-full">下载 Win64 便携版</span>
+          <span class="header-cta-label-short">下载</span>
+        </a>
+
+        <button
+          type="button"
+          id="mobile-menu-open"
+          class="mobile-menu-trigger"
+          aria-label="打开导航菜单"
+          aria-expanded="false"
+          aria-controls="mobile-drawer"
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true">
+            <path d="M2.5 4.2h11M2.5 8h11M2.5 11.8h11"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 移动端原生 <dialog> 滑动导航抽屉 -->
+  <dialog id="mobile-drawer" class="mobile-drawer" aria-label="移动端导航菜单">
+    <div class="mobile-drawer-scroller">
+      <div class="mobile-drawer-spacer" aria-hidden="true"></div>
+      <div class="mobile-drawer-sheet">
+        <div class="mobile-drawer-head">
+          <span class="brand-link">
+            <img src="/brand/logo-128.png" alt="" width="22" height="22" class="brand-logo brand-logo--sm" decoding="async">
+            <span class="brand-wordmark" data-site-brand>Solacut</span>
+          </span>
+          <button
+            type="button"
+            id="mobile-menu-close"
+            class="mobile-drawer-close"
+            aria-label="关闭导航菜单"
+            autofocus
+          >
+            <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" aria-hidden="true">
+              <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+            </svg>
+          </button>
+        </div>
+
+        <nav aria-label="移动端导航">
+          <ul class="mobile-drawer-list">
+            <li><a class="mobile-drawer-link" href="#workbench"><span>工作台</span><span class="mono" aria-hidden="true">01</span></a></li>
+            <li><a class="mobile-drawer-link" href="#translation"><span>母语译核</span><span class="mono" aria-hidden="true">02</span></a></li>
+            <li><a class="mobile-drawer-link" href="#specs"><span>架构规格</span><span class="mono" aria-hidden="true">03</span></a></li>
+            <li><a class="mobile-drawer-link" href="#workflow"><span>工作流</span><span class="mono" aria-hidden="true">04</span></a></li>
+            <li><a class="mobile-drawer-link" href="#download"><span>安全下载</span><span class="mono" aria-hidden="true">05</span></a></li>
+          </ul>
+        </nav>
+
+        <div class="mobile-drawer-foot">
+          <a class="btn btn-primary" href="#download">下载 Win64 便携版</a>
+          <a
+            class="btn btn-secondary"
+            href="https://github.com/Entelina/solacut"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-site-repo
+          >
+            GitHub
+          </a>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <main id="main-content">
+    <!-- 2. Hero 首屏 + 镇馆交互组件「微缩 Solacut NLE 暗房工作台」 -->
+    <section id="top" class="hero">
+      <div class="container">
+        <div class="hero-head">
+          <div class="hero-eyebrow-row">
+            <span class="hero-spec-tag">
+              <span class="hero-spec-dot" aria-hidden="true"></span>
+              <span>WINDOWS NATIVE NLE WORKBENCH</span>
+            </span>
+            <span class="hero-spec-tag mono">
+              <span data-site-version>v0.9.0-beta</span> · 零上传纯本地
+            </span>
+          </div>
+
+          <h1 class="hero-title"><span class="nowrap">从冗长录屏中，</span><span class="nowrap">精准切出高光与</span><span class="nowrap">母语级字幕。</span></h1>
+
+          <p class="hero-subtitle">
+            面向游戏切片师、跨语种主播与字幕组的原生 Windows 暗房工作台。自动锁定 OBS 纯人声麦轨筛出高能爆点，以 60 万条本地六语种语料与三道零漏翻闭环生成双语字幕，一键无损直切或导出 CMX 3600 EDL 回迁 <span class="nowrap">DaVinci / Premiere</span>。
+          </p>
+
+          <div class="hero-actions">
+            <a class="btn btn-primary btn-lg" href="#download">
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 2.5v7.8m0 0-3-3m3 3 3-3M2.8 13h10.4"/>
+              </svg>
+              <span>下载便携版 · 免 Python</span>
+            </a>
+            <a class="btn btn-secondary btn-lg" href="#translation">
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2.5 4h6m-3-1.5V4m2 0c-.6 2.3-2 4.1-4.5 5.2m1.3-3.4c.7 1.3 1.8 2.4 3.2 3.1M8.8 13.5l2.4-6.2 2.4 6.2m-4.1-1.8h3.4"/>
+              </svg>
+              <span>实测 6 语种译效</span>
+            </a>
+          </div>
+        </div>
+
+        <!-- 硬件级 4 格指标刻度条 -->
+        <ul class="telemetry-strip" role="list" aria-label="核心工程指标">
+          <li class="telemetry-cell">
+            <span class="telemetry-value telemetry-value--accent mono">600,000 条</span>
+            <span class="telemetry-label">六语种语料（含 22.8 万商用内置）</span>
+          </li>
+          <li class="telemetry-cell">
+            <span class="telemetry-value mono">3 道闭环</span>
+            <span class="telemetry-label">源语种感知零漏翻硬核质检</span>
+          </li>
+          <li class="telemetry-cell">
+            <span class="telemetry-value mono">&lt; 15 ms</span>
+            <span class="telemetry-label">本地 SQLite FTS5 RAG 毫秒召回</span>
+          </li>
+          <li class="telemetry-cell">
+            <span class="telemetry-value mono">0 字节</span>
+            <span class="telemetry-label">原片素材上传 · 纯本地 BYOK</span>
+          </li>
+        </ul>
+
+        <!-- 镇馆交互组件：微缩 Solacut NLE 暗房工作台 -->
+        <figure id="workbench" class="nle-stage">
+          <figcaption class="visually-hidden">Solacut 桌面端暗房工作台交互预览，可切换四个高光切片、调节字幕模式、使用 J/K/L 走带键并拖拽音频波形播放头。</figcaption>
+          <div id="nle-workbench" class="nle-window">
+            <!-- 仿无边框 38px 顶栏 -->
+            <div class="nle-titlebar">
+              <div class="nle-titlebar-left">
+                <span class="nle-app-id">
+                  <img src="/brand/logo-128.png" alt="" width="18" height="18" decoding="async">
+                  <span>Solacut</span>
+                </span>
+                <div class="nle-menubar" aria-hidden="true">
+                  <span class="nle-menubar-item">文件</span>
+                  <span class="nle-menubar-item">剪辑</span>
+                  <span class="nle-menubar-item">字幕</span>
+                  <span class="nle-menubar-item">导出</span>
+                </div>
+                <span class="nle-track-chip" data-nle-track-label>OBS Track 2 · 纯人声 200-3400Hz</span>
+              </div>
+
+              <div class="nle-titlebar-right">
+                <span class="nle-qa-chip">
+                  <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M2.2 6.3 4.8 8.9 9.8 3.2"/>
+                  </svg>
+                  <span>0 漏翻 PASS</span>
+                </span>
+                <span class="nle-smpte"><span class="visually-hidden">当前时间码 </span><span data-nle-smpte>01:14:32:54</span></span>
+                <div class="nle-win-controls" aria-hidden="true">
+                  <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2">
+                    <path d="M1 5h8"/>
+                  </svg>
+                  <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2">
+                    <rect x="1.5" y="1.5" width="7" height="7"/>
+                  </svg>
+                  <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2">
+                    <path d="M1.8 1.8l6.4 6.4M8.2 1.8l-6.4 6.4"/>
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <!-- 主体：左高光切点列表 + 右 16:9 暗房监视器 -->
+            <div class="nle-workspace">
+              <div class="nle-sidebar">
+                <div class="nle-pane-bar">
+                  <span>HIGHLIGHTS · 4 CLIPS</span>
+                  <span>200-3400Hz</span>
+                </div>
+                <ul class="nle-clip-list" role="list" aria-label="高光切片候选列表">
+                  <li>
+                    <button type="button" class="nle-clip-btn" data-nle-clip="0" aria-current="true">
+                      <span class="nle-clip-row-top">
+                        <span class="nle-clip-rank">#01 · 34s</span>
+                        <span class="nle-clip-lang">EN → ZH</span>
+                      </span>
+                      <span class="nle-clip-title">残血漏弹反 · 弹幕瞬间破防</span>
+                      <span class="nle-clip-row-foot">
+                        <span>01:14:18 — 01:14:52</span>
+                        <span class="nle-clip-peak">-1.8 dB</span>
+                      </span>
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" class="nle-clip-btn" data-nle-clip="1" aria-current="false">
+                      <span class="nle-clip-row-top">
+                        <span class="nle-clip-rank">#02 · 33s</span>
+                        <span class="nle-clip-lang">JA → ZH</span>
+                      </span>
+                      <span class="nle-clip-title">决胜局下饭失误 · 日语暴走</span>
+                      <span class="nle-clip-row-foot">
+                        <span>02:08:11 — 02:08:44</span>
+                        <span class="nle-clip-peak">-2.3 dB</span>
+                      </span>
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" class="nle-clip-btn" data-nle-clip="2" aria-current="false">
+                      <span class="nle-clip-row-top">
+                        <span class="nle-clip-rank">#03 · 34s</span>
+                        <span class="nle-clip-lang">RU → ZH</span>
+                      </span>
+                      <span class="nle-clip-title">隔烟盲穿一枪秒 · 俄语卡点</span>
+                      <span class="nle-clip-row-foot">
+                        <span>00:46:05 — 00:46:39</span>
+                        <span class="nle-clip-peak">-1.4 dB</span>
+                      </span>
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" class="nle-clip-btn" data-nle-clip="3" aria-current="false">
+                      <span class="nle-clip-row-top">
+                        <span class="nle-clip-rank">#04 · 38s</span>
+                        <span class="nle-clip-lang">ES → ZH</span>
+                      </span>
+                      <span class="nle-clip-title">中路吃钩被演麻 · 西语翻盘</span>
+                      <span class="nle-clip-row-foot">
+                        <span>01:52:30 — 01:53:08</span>
+                        <span class="nle-clip-peak">-2.1 dB</span>
+                      </span>
+                    </button>
+                  </li>
+                </ul>
+                <div class="nle-sidebar-foot">
+                  <span>EXPORT PROFILE</span>
+                  <span class="nle-sidebar-foot-val">MP4 · ASS · EDL</span>
+                </div>
+              </div>
+
+              <div class="nle-monitor-col">
+                <div class="nle-monitor-toolbar">
+                  <div class="nle-transport-group">
+                    <!-- WCAG 2.2.2 播放/暂停按钮：切换文案时不设置 aria-pressed -->
+                    <button type="button" class="nle-play-btn" data-nle-play-toggle aria-label="暂停时间线模拟播放">
+                      <svg data-nle-icon-pause viewBox="0 0 12 12" width="11" height="11" fill="currentColor" aria-hidden="true">
+                        <rect x="2.2" y="1.8" width="2.5" height="8.4"/>
+                        <rect x="7.3" y="1.8" width="2.5" height="8.4"/>
+                      </svg>
+                      <svg data-nle-icon-play class="is-hidden" viewBox="0 0 12 12" width="11" height="11" fill="currentColor" aria-hidden="true">
+                        <path d="M2.6 1.8 10.2 6l-7.6 4.2z"/>
+                      </svg>
+                      <span data-nle-play-label>暂停</span>
+                    </button>
+                    <span class="nle-scene-spec" data-nle-scene-spec>1080p · 60.00 fps · REC.709</span>
+                  </div>
+
+                  <div class="nle-sub-modes" role="group" aria-label="ASS 字幕覆层排布模式">
+                    <button type="button" class="nle-mode-btn" data-nle-sub-mode="zh-top" aria-pressed="true">译上原下</button>
+                    <button type="button" class="nle-mode-btn" data-nle-sub-mode="src-top" aria-pressed="false">原上译下</button>
+                    <button type="button" class="nle-mode-btn" data-nle-sub-mode="zh-only" aria-pressed="false">仅译文</button>
+                  </div>
+                </div>
+
+                <!-- 16:9 精密暗房监视器 -->
+                <div class="nle-viewport">
+                  <div class="nle-safe-frame-outer" aria-hidden="true"></div>
+                  <div class="nle-safe-frame-inner" aria-hidden="true"></div>
+                  <div class="nle-crop-916" aria-hidden="true"></div>
+                  <span class="nle-bracket nle-bracket--tl" aria-hidden="true"></span>
+                  <span class="nle-bracket nle-bracket--tr" aria-hidden="true"></span>
+                  <span class="nle-bracket nle-bracket--bl" aria-hidden="true"></span>
+                  <span class="nle-bracket nle-bracket--br" aria-hidden="true"></span>
+                  <div class="nle-crosshair" aria-hidden="true"></div>
+
+                  <div class="nle-hud-top">
+                    <div class="nle-hud-rag" data-nle-rag>
+                      <span class="nle-hud-tag nle-hud-tag--accent">RAG 命中</span>
+                      <span class="nle-hud-tag">whiff → 漏掉/打空</span>
+                      <span class="nle-hud-tag">parry → 弹反</span>
+                      <span class="nle-hud-tag">goes feral → 直接疯了</span>
+                    </div>
+
+                    <span class="nle-hud-rag-compact nle-hud-tag nle-hud-tag--accent" data-nle-rag-compact>RAG · 3 词条命中</span>
+
+                    <div class="nle-vu-meter" aria-hidden="true">
+                      <div class="nle-vu-head">
+                        <span>PEAK METER</span>
+                        <span data-nle-vu-peak>-1.8 dB</span>
+                      </div>
+                      <div class="nle-vu-row">
+                        <span>L</span>
+                        <div class="nle-vu-track">
+                          <div class="nle-vu-fill" data-nle-vu-left style="transform:scaleX(0.92)"></div>
+                        </div>
+                      </div>
+                      <div class="nle-vu-row">
+                        <span>R</span>
+                        <div class="nle-vu-track">
+                          <div class="nle-vu-fill" data-nle-vu-right style="transform:scaleX(0.88)"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 实时双语 ASS 字幕覆层 -->
+                  <div class="nle-subtitle-overlay">
+                    <div class="nle-sub-box" data-nle-sub-box data-mode="zh-top">
+                      <p class="nle-sub-line nle-sub-zh" data-nle-sub-zh lang="zh-CN">好家伙我就漏了一次弹反，弹幕直接疯了。</p>
+                      <p class="nle-sub-line nle-sub-src" data-nle-sub-src lang="en">God forbid I whiff one parry and chat instantly goes feral.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 底部精密音频波形与时间线交互轨 -->
+            <div class="nle-timeline">
+              <div class="nle-timeline-head">
+                <div class="nle-timeline-legend">
+                  <span class="nle-legend-item">
+                    <span class="nle-swatch nle-swatch--amber" aria-hidden="true"></span>
+                    <span>高能人声峰值区 (200-3400Hz)</span>
+                  </span>
+                  <span class="nle-legend-item">
+                    <span class="nle-swatch nle-swatch--accent" aria-hidden="true"></span>
+                    <span>点击或拖拽波形即时定位播放头</span>
+                  </span>
+                </div>
+                <div class="nle-timeline-keys" role="group" aria-label="非编快捷走带键">
+                  <button type="button" class="nle-kbd-btn" data-nle-shuttle="back" title="J：后退进度" aria-label="J 键：后退时间线">J</button>
+                  <button type="button" class="nle-kbd-btn" data-nle-shuttle="toggle" title="K：播放或暂停" aria-label="K 键：播放或暂停">K</button>
+                  <button type="button" class="nle-kbd-btn" data-nle-shuttle="forward" title="L：前进进度" aria-label="L 键：前进时间线">L</button>
+                  <button type="button" class="nle-kbd-btn" data-nle-shuttle="in" title="I：跳至高能入点" aria-label="I 键：定位高能入点">I</button>
+                  <button type="button" class="nle-kbd-btn" data-nle-shuttle="out" title="O：跳至高能出点" aria-label="O 键：定位高能出点">O</button>
+                </div>
+              </div>
+
+              <div class="nle-ruler" data-nle-ruler aria-hidden="true">
+                <span>01:14:18</span>
+                <span>01:14:23</span>
+                <span>01:14:29</span>
+                <span>01:14:35</span>
+                <span>01:14:40</span>
+                <span>01:14:46</span>
+                <span>01:14:52</span>
+              </div>
+
+              <div class="nle-waveform-track" data-nle-waveform-track>
+                <canvas class="nle-waveform-canvas" data-nle-canvas aria-hidden="true"></canvas>
+                <div class="nle-playhead" data-nle-playhead style="--playhead-pct: 44%" aria-hidden="true"></div>
+                <input
+                  type="range"
+                  class="nle-scrub-range"
+                  data-nle-scrub
+                  min="0"
+                  max="1000"
+                  value="440"
+                  aria-label="拖动音频波形时间线定位播放头"
+                >
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <!-- 3. 王牌交互板块：6 语种 × 60 万语料 · 普通机翻 vs Solacut 母语意译 -->
+    <section id="translation" class="section">
+      <div class="container">
+        <header class="section-header">
+          <div class="eyebrow">
+            <span class="eyebrow-accent" aria-hidden="true"></span>
+            <span>01 / NATIVE TRANSLATION ENGINE</span>
+          </div>
+          <h2 class="section-title"><span class="nowrap">6 语种 × 60 万语料，</span><span class="nowrap">拒绝翻译腔与漏翻黑洞。</span></h2>
+          <p class="section-lead">
+            通用机翻看不懂游戏黑话、弹幕反讽与连读缩写，更常在长片段中悄悄漏译整句。Solacut 在本地以 SQLite FTS5 Trigram 毫秒级召回母语参考卡，并用源语种字符残留质检与定点补翻兜底，覆盖六大热门游戏直播语种对。支持使用方向键或浏览器页内搜索 (<kbd class="kbd-chip">Ctrl</kbd>+<kbd class="kbd-chip">F</kbd>) 直接跨语种检索例句。
+          </p>
+        </header>
+
+        <div id="translation-deck" class="translation-deck">
+          <div class="tablist-bar">
+            <div class="translation-tablist" role="tablist" aria-label="六语种翻译实测对比">
+              <button type="button" role="tab" id="tab-en-zh" class="translation-tab" aria-selected="true" tabindex="0">
+                <span>英 → 中</span>
+                <span class="translation-tab-code">EN→ZH</span>
+              </button>
+              <button type="button" role="tab" id="tab-ja-zh" class="translation-tab" aria-selected="false" tabindex="-1">
+                <span>日 → 中</span>
+                <span class="translation-tab-code">JA→ZH</span>
+              </button>
+              <button type="button" role="tab" id="tab-ko-zh" class="translation-tab" aria-selected="false" tabindex="-1">
+                <span>韩 → 中</span>
+                <span class="translation-tab-code">KO→ZH</span>
+              </button>
+              <button type="button" role="tab" id="tab-ru-zh" class="translation-tab" aria-selected="false" tabindex="-1">
+                <span>俄 → 中</span>
+                <span class="translation-tab-code">RU→ZH</span>
+              </button>
+              <button type="button" role="tab" id="tab-es-zh" class="translation-tab" aria-selected="false" tabindex="-1">
+                <span>西 → 中</span>
+                <span class="translation-tab-code">ES→ZH</span>
+              </button>
+              <button type="button" role="tab" id="tab-zh-en" class="translation-tab" aria-selected="false" tabindex="-1">
+                <span>中 → 英出海</span>
+                <span class="translation-tab-code">ZH→EN</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="translation-panels">
+            <!-- Panel 1: 英 → 中 -->
+            <div role="tabpanel" class="translation-panel" aria-labelledby="tab-en-zh" tabindex="0">
+              <div class="translation-panel-inner">
+                <div class="case-source-bar">
+                  <div>
+                    <div class="case-source-meta">
+                      <span class="case-direction">英语直播原声 → 中文母语字幕</span>
+                      <span class="case-context">Twitch / 动作游戏高难 Boss 切片</span>
+                    </div>
+                    <blockquote class="case-source-quote" lang="en">“God forbid I whiff one parry and chat instantly goes feral.”</blockquote>
+                  </div>
+                </div>
+                <div class="case-compare-grid">
+                  <div class="case-col case-col--mt">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--mt">普通机翻直译</span>
+                      <span class="case-col-tag case-col-tag--fail">字面失真</span>
+                    </div>
+                    <p class="case-output case-output--mt" lang="zh-CN">上帝禁止我打空一次格挡然后聊天立刻变野蛮。</p>
+                    <p class="case-note">硬译习语“God forbid”与直播高频词“chat / goes feral”，喜剧反差感彻底崩塌，观众出戏。</p>
+                  </div>
+                  <div class="case-col case-col--solacut">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--solacut">Solacut 母语意译</span>
+                      <span class="case-col-tag case-col-tag--pass">0 漏翻 PASS</span>
+                    </div>
+                    <p class="case-output case-output--solacut" lang="zh-CN">好家伙我就漏了一次弹反，弹幕直接疯了。</p>
+                    <p class="case-note">精准捕捉反讽句式，同时命中游戏黑话“whiff / parry”与直播语境“chat → 弹幕”，一步到位达到熟肉字幕组水准。</p>
+                  </div>
+                </div>
+                <div class="case-telemetry">
+                  <div class="case-telemetry-metrics">
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">语料库</span> <span>100,000 条 FTS5 索引</span></span>
+                    <span class="case-telemetry-sep" aria-hidden="true">|</span>
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">本地 RAG 耗时</span> <span>6.4 ms</span></span>
+                    <span class="status-badge status-badge--pass">0 漏翻 · 未译英文残留 0 处</span>
+                  </div>
+                  <div class="case-glossary-hits">
+                    <span class="case-hit-chip">whiff → 漏掉</span>
+                    <span class="case-hit-chip">parry → 弹反</span>
+                    <span class="case-hit-chip">goes feral → 直接疯了</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 2: 日 → 中 -->
+            <div role="tabpanel" class="translation-panel" aria-labelledby="tab-ja-zh" hidden="until-found">
+              <div class="translation-panel-inner">
+                <div class="case-source-bar">
+                  <div>
+                    <div class="case-source-meta">
+                      <span class="case-direction">日语直播原声 → 中文母语字幕</span>
+                      <span class="case-context">VTuber / 日服排位破防名场面</span>
+                    </div>
+                    <blockquote class="case-source-quote" lang="ja">「草生える、今の完全にプレミじゃん、一回落ち着けって」</blockquote>
+                  </div>
+                </div>
+                <div class="case-compare-grid">
+                  <div class="case-col case-col--mt">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--mt">普通机翻直译</span>
+                      <span class="case-col-tag case-col-tag--fail">黑话错译</span>
+                    </div>
+                    <p class="case-output case-output--mt" lang="zh-CN">长草了，刚才完全是高级失误吧，冷静一次。</p>
+                    <p class="case-note">把弹幕词“草生える”译成植物长草，把日语电竞缩写“プレミ (プレイミス)”误判成“高级”。</p>
+                  </div>
+                  <div class="case-col case-col--solacut">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--solacut">Solacut 母语意译</span>
+                      <span class="case-col-tag case-col-tag--pass">0 漏翻 PASS</span>
+                    </div>
+                    <p class="case-output case-output--solacut" lang="zh-CN">笑死，刚刚那波纯纯下饭操作，兄弟先稳一手。</p>
+                    <p class="case-note">FTS5 Trigram 无空格分词精准命中日语电竞缩略词“プレミ”与口语收尾，贴合中文玩家语感。</p>
+                  </div>
+                </div>
+                <div class="case-telemetry">
+                  <div class="case-telemetry-metrics">
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">语料库</span> <span>100,000 条 FTS5 Trigram</span></span>
+                    <span class="case-telemetry-sep" aria-hidden="true">|</span>
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">本地 RAG 耗时</span> <span>9.8 ms</span></span>
+                    <span class="status-badge status-badge--pass">0 漏翻 · 假名残留 0 处</span>
+                  </div>
+                  <div class="case-glossary-hits">
+                    <span class="case-hit-chip">草生える → 笑死</span>
+                    <span class="case-hit-chip">プレミ → 下饭操作</span>
+                    <span class="case-hit-chip">一回落ち着け → 先稳一手</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 3: 韩 → 中 -->
+            <div role="tabpanel" class="translation-panel" aria-labelledby="tab-ko-zh" hidden="until-found">
+              <div class="translation-panel-inner">
+                <div class="case-source-bar">
+                  <div>
+                    <div class="case-source-meta">
+                      <span class="case-direction">韩语直播原声 → 中文母语字幕</span>
+                      <span class="case-context">韩服高端局 / MOBA 团战集锦</span>
+                    </div>
+                    <blockquote class="case-source-quote" lang="ko">“아니 이건 진짜 억까 아니냐고, 궁 빠진 거 보고 들어오네”</blockquote>
+                  </div>
+                </div>
+                <div class="case-compare-grid">
+                  <div class="case-col case-col--mt">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--mt">普通机翻直译</span>
+                      <span class="case-col-tag case-col-tag--fail">语义断裂</span>
+                    </div>
+                    <p class="case-output case-output--mt" lang="zh-CN">不是这真是勉强黑吗，看着大招掉了进来啊。</p>
+                    <p class="case-note">完全无法理解韩网新造词“억까”与技能冷却表达“궁 빠진 거”，译文生硬难懂。</p>
+                  </div>
+                  <div class="case-col case-col--solacut">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--solacut">Solacut 母语意译</span>
+                      <span class="case-col-tag case-col-tag--pass">0 漏翻 PASS</span>
+                    </div>
+                    <p class="case-output case-output--solacut" lang="zh-CN">不是吧这纯属针对硬演我，看我没大直接硬开啊。</p>
+                    <p class="case-note">Trigram 索引召回韩服电竞术语卡，完整保留“没大招被对面盯上强开”的实战张力。</p>
+                  </div>
+                </div>
+                <div class="case-telemetry">
+                  <div class="case-telemetry-metrics">
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">语料库</span> <span>100,000 条 FTS5 Trigram</span></span>
+                    <span class="case-telemetry-sep" aria-hidden="true">|</span>
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">本地 RAG 耗时</span> <span>11.2 ms</span></span>
+                    <span class="status-badge status-badge--pass">0 漏翻 · 谚文残留 0 处</span>
+                  </div>
+                  <div class="case-glossary-hits">
+                    <span class="case-hit-chip">억까 → 针对硬演</span>
+                    <span class="case-hit-chip">궁 빠진 거 → 没大</span>
+                    <span class="case-hit-chip">들어오네 → 直接硬开</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 4: 俄 → 中 -->
+            <div role="tabpanel" class="translation-panel" aria-labelledby="tab-ru-zh" hidden="until-found">
+              <div class="translation-panel-inner">
+                <div class="case-source-bar">
+                  <div>
+                    <div class="case-source-meta">
+                      <span class="case-direction">俄语直播原声 → 中文母语字幕</span>
+                      <span class="case-context">CIS 赛区 / CS2 战术 FPS 残局</span>
+                    </div>
+                    <blockquote class="case-source-quote" lang="ru">“Жесть, он меня реально ваншотнул через смок, найс тайминг”</blockquote>
+                  </div>
+                </div>
+                <div class="case-compare-grid">
+                  <div class="case-col case-col--mt">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--mt">普通机翻直译</span>
+                      <span class="case-col-tag case-col-tag--fail">音译崩坏</span>
+                    </div>
+                    <p class="case-output case-output--mt" lang="zh-CN">铁皮，他真的通过烟雾一枪我了，好时机。</p>
+                    <p class="case-note">“Жесть”按词典直译为“铁皮”，俄语西里尔化的英文借词“ваншотнул / смок / тайминг”全线翻车。</p>
+                  </div>
+                  <div class="case-col case-col--solacut">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--solacut">Solacut 母语意译</span>
+                      <span class="case-col-tag case-col-tag--pass">0 漏翻 PASS</span>
+                    </div>
+                    <p class="case-output case-output--solacut" lang="zh-CN">离大谱，隔着烟都能一枪把我秒了，这卡点绝了。</p>
+                    <p class="case-note">准确识破俄区 FPS 借词变位与反讽感叹语气，输出地道 CS 观赛中文表达。</p>
+                  </div>
+                </div>
+                <div class="case-telemetry">
+                  <div class="case-telemetry-metrics">
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">语料库</span> <span>100,000 条 FTS5 索引</span></span>
+                    <span class="case-telemetry-sep" aria-hidden="true">|</span>
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">本地 RAG 耗时</span> <span>8.1 ms</span></span>
+                    <span class="status-badge status-badge--pass">0 漏翻 · 西里尔残留 0 处</span>
+                  </div>
+                  <div class="case-glossary-hits">
+                    <span class="case-hit-chip">Жесть → 离大谱</span>
+                    <span class="case-hit-chip">ваншотнул → 一枪秒</span>
+                    <span class="case-hit-chip">тайминг → 卡点</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 5: 西 → 中 -->
+            <div role="tabpanel" class="translation-panel" aria-labelledby="tab-es-zh" hidden="until-found">
+              <div class="translation-panel-inner">
+                <div class="case-source-bar">
+                  <div>
+                    <div class="case-source-meta">
+                      <span class="case-direction">西语直播原声 → 中文母语字幕</span>
+                      <span class="case-context">拉美/西语区主播 / 中路视野博弈</span>
+                    </div>
+                    <blockquote class="case-source-quote" lang="es">“No manches, me comí tremendo bait en mid, qué troleada”</blockquote>
+                  </div>
+                </div>
+                <div class="case-compare-grid">
+                  <div class="case-col case-col--mt">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--mt">普通机翻直译</span>
+                      <span class="case-col-tag case-col-tag--fail">俗语硬译</span>
+                    </div>
+                    <p class="case-output case-output--mt" lang="zh-CN">别弄脏，我在中路吃了巨大的诱饵，多么巨魔。</p>
+                    <p class="case-note">拉美高频叹词“No manches”被按字面直译为“别弄脏”，“troleada”译成“巨魔”，毫无笑点。</p>
+                  </div>
+                  <div class="case-col case-col--solacut">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--solacut">Solacut 母语意译</span>
+                      <span class="case-col-tag case-col-tag--pass">0 漏翻 PASS</span>
+                    </div>
+                    <p class="case-output case-output--solacut" lang="zh-CN">离谱，中路直接吃了对面一个大钩子，纯纯被演麻了。</p>
+                    <p class="case-note">反直译红线金库命中西语口语与 MOBA 混用黑话“bait / mid / troleada”，流畅自然。</p>
+                  </div>
+                </div>
+                <div class="case-telemetry">
+                  <div class="case-telemetry-metrics">
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">语料库</span> <span>100,000 条 FTS5 索引</span></span>
+                    <span class="case-telemetry-sep" aria-hidden="true">|</span>
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">本地 RAG 耗时</span> <span>7.3 ms</span></span>
+                    <span class="status-badge status-badge--pass">0 漏翻 · 西语残词 0 处</span>
+                  </div>
+                  <div class="case-glossary-hits">
+                    <span class="case-hit-chip">No manches → 离谱</span>
+                    <span class="case-hit-chip">me comí bait → 吃钩</span>
+                    <span class="case-hit-chip">troleada → 被演麻了</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 6: 中 → 英出海 -->
+            <div role="tabpanel" class="translation-panel" aria-labelledby="tab-zh-en" hidden="until-found">
+              <div class="translation-panel-inner">
+                <div class="case-source-bar">
+                  <div>
+                    <div class="case-source-meta">
+                      <span class="case-direction">中文高光原声 → 母语级出海英文字幕</span>
+                      <span class="case-context">国服主播 / YouTube Shorts &amp; TikTok 出海</span>
+                    </div>
+                    <blockquote class="case-source-quote" lang="zh-CN">“这波弹反空了直接破防，对面打野纯在演我”</blockquote>
+                  </div>
+                </div>
+                <div class="case-compare-grid">
+                  <div class="case-col case-col--mt">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--mt">普通机翻直译</span>
+                      <span class="case-col-tag case-col-tag--fail">中式 Chinglish</span>
+                    </div>
+                    <p class="case-output case-output--mt" lang="en">This wave parry empty directly break defense, opposite jungle purely acting me.</p>
+                    <p class="case-note">逐词硬翻导致严重 Chinglish，海外观众看不懂“break defense / acting me”，完播率暴跌。</p>
+                  </div>
+                  <div class="case-col case-col--solacut">
+                    <div class="case-col-head">
+                      <span class="case-col-label case-col-label--solacut">Solacut 母语意译</span>
+                      <span class="case-col-tag case-col-tag--pass">0 漏翻 PASS</span>
+                    </div>
+                    <p class="case-output case-output--solacut" lang="en">That missed parry totally tilted me — their jungler is straight-up trolling.</p>
+                    <p class="case-note">直出欧美游戏圈原生高频表达：“破防 → tilted”、“纯在演我 → straight-up trolling”，出海即母语。</p>
+                  </div>
+                </div>
+                <div class="case-telemetry">
+                  <div class="case-telemetry-metrics">
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">语料库</span> <span>100,000 条 FTS5 Trigram</span></span>
+                    <span class="case-telemetry-sep" aria-hidden="true">|</span>
+                    <span class="case-telemetry-item"><span class="case-telemetry-key">本地 RAG 耗时</span> <span>10.6 ms</span></span>
+                    <span class="status-badge status-badge--pass">0 漏翻 · 中文字符残留 0 处</span>
+                  </div>
+                  <div class="case-glossary-hits">
+                    <span class="case-hit-chip">破防 → tilted</span>
+                    <span class="case-hit-chip">打野 → jungler</span>
+                    <span class="case-hit-chip">纯在演我 → straight-up trolling</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 瑞士工业网格能力矩阵（6 格无缝 1px 细线建筑栅格） -->
+    <section id="specs" class="section">
+      <div class="container">
+        <header class="section-header">
+          <div class="eyebrow">
+            <span class="eyebrow-accent" aria-hidden="true"></span>
+            <span>02 / ENGINEERING ARCHITECTURE</span>
+          </div>
+          <h2 class="section-title">为真实剪辑台打造的硬核工程规格。</h2>
+          <p class="section-lead">
+            没有云端抽水、没有格式转码折损、没有塑料感自动化黑盒。从音轨滤波到时间线回迁，每一环都按影视后期与字幕组生产标准逐项验证。
+          </p>
+        </header>
+
+        <ul class="swiss-grid" role="list">
+          <li class="swiss-cell">
+            <div class="swiss-cell-top">
+              <span class="swiss-index">SPEC 01</span>
+              <span class="swiss-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8 1.8 13.4 4v4.1c0 3.1-2.2 5.4-5.4 6.1-3.2-.7-5.4-3-5.4-6.1V4L8 1.8z"/>
+                  <path d="m5.5 8.1 1.7 1.7 3.4-3.6"/>
+                </svg>
+              </span>
+            </div>
+            <h3 class="swiss-cell-title">三道零漏翻闭环</h3>
+            <p class="swiss-cell-desc">
+              先用本地 FTS5 RAG 注入原创游戏术语与反直译红线卡；再执行源语种感知硬质检，拦截未译英文、日语假名、韩语谚文、俄语西里尔残留及时间轴跳句黑洞；发现缺口自动触发手术刀级定点补翻。
+            </p>
+            <div class="swiss-cell-meta">
+              <span class="swiss-spec-pill">RAG 注入</span>
+              <span class="swiss-spec-pill">残留扫描</span>
+              <span class="swiss-spec-pill">定点补翻</span>
+            </div>
+          </li>
+
+          <li class="swiss-cell">
+            <div class="swiss-cell-top">
+              <span class="swiss-index">SPEC 02</span>
+              <span class="swiss-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="3" width="12" height="10" rx="1"/>
+                  <path d="M2 10h12M6 3v7M10 10v3"/>
+                </svg>
+              </span>
+            </div>
+            <h3 class="swiss-cell-title">达芬奇级本地 NLE 操控</h3>
+            <p class="swiss-cell-desc">
+              原生 Edge WebView2 无边框暗房窗口搭配 HTTP Range 局部读取，数小时 4K 录屏毫秒拖动不卡顿。内建非编键位操控与独立操作历史栈，单人可飞速完成审片、改译文与修剪起止点。
+            </p>
+            <div class="swiss-cell-meta">
+              <kbd class="kbd-chip">J</kbd>
+              <kbd class="kbd-chip">K</kbd>
+              <kbd class="kbd-chip">L</kbd>
+              <kbd class="kbd-chip">I</kbd>
+              <kbd class="kbd-chip">O</kbd>
+              <span class="swiss-spec-pill">50 步撤销栈</span>
+            </div>
+          </li>
+
+          <li class="swiss-cell">
+            <div class="swiss-cell-top">
+              <span class="swiss-index">SPEC 03</span>
+              <span class="swiss-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 8h2l1.5-4.2L7.8 12l2-7 1.7 3H14"/>
+                </svg>
+              </span>
+            </div>
+            <h3 class="swiss-cell-title">OBS 多音轨人声带通</h3>
+            <p class="swiss-cell-desc">
+              自动调用 FFprobe 枚举 MKV / MP4 全部音轨并智能推荐主播纯人声麦轨；测算高能峰值时以纯 NumPy FFT 执行 200-3400Hz 人声带通滤波，彻底屏蔽游戏低频爆炸与枪炮轰鸣导致的误报切片。
+            </p>
+            <div class="swiss-cell-meta">
+              <span class="swiss-spec-pill">FFprobe 多轨探测</span>
+              <span class="swiss-spec-pill">200-3400Hz FFT</span>
+            </div>
+          </li>
+
+          <li class="swiss-cell">
+            <div class="swiss-cell-top">
+              <span class="swiss-index">SPEC 04</span>
+              <span class="swiss-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2.5 5h11M2.5 11h11M6 2.5v11M10.5 5v6"/>
+                </svg>
+              </span>
+            </div>
+            <h3 class="swiss-cell-title">无损直切与 EDL / CSV 回迁</h3>
+            <p class="swiss-cell-desc">
+              支持 FFmpeg 原画流拷贝毫秒无损直切（含长 GOP 关键帧偏移补偿自动校准 SRT 时间轴），同步输出标准 CMX 3600 EDL 与达芬奇 CSV 标记表无缝回迁精剪，或直出 9:16 竖屏双语 ASS 硬字幕成片。
+            </p>
+            <div class="swiss-cell-meta">
+              <span class="swiss-spec-pill">Stream Copy</span>
+              <span class="swiss-spec-pill">CMX 3600 EDL</span>
+              <span class="swiss-spec-pill">CSV / ASS</span>
+            </div>
+          </li>
+
+          <li class="swiss-cell">
+            <div class="swiss-cell-top">
+              <span class="swiss-index">SPEC 05</span>
+              <span class="swiss-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3.2" y="7" width="9.6" height="6.8" rx="1"/>
+                  <path d="M5.4 7V5a2.6 2.6 0 0 1 5.2 0v2"/>
+                </svg>
+              </span>
+            </div>
+            <h3 class="swiss-cell-title">纯本地 BYOK 零隐私上传</h3>
+            <p class="swiss-cell-desc">
+              几十 GB 的未公开直播录像与工程文件全程留在你的硬盘，零视频上传、零云端排队。支持本地 RTX 显卡离线 faster-whisper 与自带 API Key（DeepSeek / OpenAI 兼容端点）直连，成本完全透明。
+            </p>
+            <div class="swiss-cell-meta">
+              <span class="swiss-spec-pill">0 字节素材上传</span>
+              <span class="swiss-spec-pill">本地 RTX Whisper</span>
+              <span class="swiss-spec-pill">BYOK 直连</span>
+            </div>
+          </li>
+
+          <li class="swiss-cell">
+            <div class="swiss-cell-top">
+              <span class="swiss-index">SPEC 06</span>
+              <span class="swiss-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+                  <ellipse cx="8" cy="4" rx="5.2" ry="1.8"/>
+                  <path d="M2.8 4v4c0 1 2.3 1.8 5.2 1.8s5.2-.8 5.2-1.8V4M2.8 8v4c0 1 2.3 1.8 5.2 1.8s5.2-.8 5.2-1.8V8"/>
+                </svg>
+              </span>
+            </div>
+            <h3 class="swiss-cell-title">商用无限制语料分级</h3>
+            <p class="swiss-cell-desc">
+              便携分发包严格内置 228,210 条仅含 MIT / CC BY / CC BY-SA 商用无限制许可的六语种平行语料与原创电竞术语库；个人研究还可在本地一键从 OPUS 官方镜像拉取扩展至 600,000 条全量口语索引。
+            </p>
+            <div class="swiss-cell-meta">
+              <span class="swiss-spec-pill">22.8 万商用内置</span>
+              <span class="swiss-spec-pill">一键扩 60 万</span>
+              <span class="swiss-spec-pill">SQLite FTS5</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 5. 4 步精密工作流刻度条（从原片到成片） -->
+    <section id="workflow" class="section">
+      <div class="container">
+        <header class="section-header">
+          <div class="eyebrow">
+            <span class="eyebrow-accent" aria-hidden="true"></span>
+            <span>03 / PRECISION PIPELINE</span>
+          </div>
+          <h2 class="section-title"><span class="nowrap">四步闭环，</span>把 4 小时录屏压缩成<span class="nowrap">可交付高光工程。</span></h2>
+          <p class="section-lead">
+            每一步均带参数指纹感知断点续跑——改了术语表或调整翻译风格，无需重跑音频分析与语音转写，秒级复算下游产物。
+          </p>
+        </header>
+
+        <ol class="workflow-rail" role="list">
+          <li class="workflow-step">
+            <div class="workflow-step-head">
+              <span class="workflow-step-code">STEP 01</span>
+              <span class="workflow-step-io">FFprobe + FFT</span>
+            </div>
+            <h3 class="workflow-step-title">多轨探测与带通锁定</h3>
+            <p class="workflow-step-desc">
+              选定 MKV / MP4 录屏目录，自动识别 OBS 纯人声麦轨，执行 200-3400Hz 带通滤波定位真实人声爆发区，滤除爆炸声与静音段。
+            </p>
+            <div class="workflow-step-output">OUT → 16k WAV + peaks.json</div>
+          </li>
+
+          <li class="workflow-step">
+            <div class="workflow-step-head">
+              <span class="workflow-step-code">STEP 02</span>
+              <span class="workflow-step-io">ASR + Silero VAD</span>
+            </div>
+            <h3 class="workflow-step-title">轻声捞回与短句转写</h3>
+            <p class="workflow-step-desc">
+              对高能候选窗口执行响度归一化与敏感 VAD 切句，支持离线 RTX large-v3-turbo 或云端 ASR 并注入主播热词表，彻底杜绝僵尸长字幕。
+            </p>
+            <div class="workflow-step-output">OUT → transcript.json (VAD)</div>
+          </li>
+
+          <li class="workflow-step">
+            <div class="workflow-step-head">
+              <span class="workflow-step-code">STEP 03</span>
+              <span class="workflow-step-io">FTS5 RAG + QA</span>
+            </div>
+            <h3 class="workflow-step-title">母语精翻与零漏翻质检</h3>
+            <p class="workflow-step-desc">
+              智能精选高光桥段，在本地毫秒级召回六语种专家参考卡进行语义重组与地道意译，经字符残留校验与定点补翻后 0 漏翻入库。
+            </p>
+            <div class="workflow-step-output">OUT → highlights.json + QA</div>
+          </li>
+
+          <li class="workflow-step">
+            <div class="workflow-step-head">
+              <span class="workflow-step-code">STEP 04</span>
+              <span class="workflow-step-io">NLE + FFmpeg</span>
+            </div>
+            <h3 class="workflow-step-title">暗房审片与无损交付</h3>
+            <p class="workflow-step-desc">
+              在暗房工作台用 J/K/L 与 I/O 微调边界和双语台词，一键导出原画无损切片、对齐 SRT、CMX 3600 EDL/CSV 标记或 9:16 双语竖屏成片。
+            </p>
+            <div class="workflow-step-output">OUT → MP4 + ASS + EDL/CSV</div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- 6. 安全公测交付台 (Download & Verification Deck) -->
+    <section id="download" class="section">
+      <div class="container">
+        <header class="section-header">
+          <div class="eyebrow">
+            <span class="eyebrow-accent" aria-hidden="true"></span>
+            <span>04 / PUBLIC BETA DELIVERY</span>
+          </div>
+          <h2 class="section-title"><span class="nowrap">解压即用，</span><span class="nowrap">SHA-256</span> <span class="nowrap">全程可核验。</span></h2>
+          <p class="section-lead">
+            免安装 Python 环境，免配置 FFmpeg 环境变量，不写系统注册表。提供开源透明校验清单，让你在第一秒就清楚自己运行的是什么。
+          </p>
+        </header>
+
+        <div class="deck-grid">
+          <!-- 左：下载操作与规格交付面板 -->
+          <div class="deck-primary">
+            <div class="deck-meta-bar">
+              <span class="deck-version-pill" data-site-version>v0.9.0-beta</span>
+              <span>发布日期：<span data-site-release-date>2026-11-23</span></span>
+              <span>体积：<span data-site-file-size>247.4 MB</span></span>
+            </div>
+
+            <div>
+              <h3 class="deck-title">Solacut for Windows (<span class="nowrap">64-bit</span> 便携版)</h3>
+              <p class="deck-desc">
+                内嵌精简运行环境、FFmpeg / FFprobe 独立二进制、原生 Edge WebView2 桌面壳，以及 228,210 条商用无限制六语种本地 SQLite FTS5 语料索引。
+              </p>
+            </div>
+
+            <div class="deck-cta-row">
+              <a
+                class="btn btn-primary btn-lg"
+                href="https://github.com/Entelina/solacut/releases/download/v0.9.0-beta/Solacut-v0.9.0-beta-win64-portable.zip"
+                data-site-download-github
+              >
+                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M8 2.5v7.8m0 0-3-3m3 3 3-3M2.8 13h10.4"/>
+                </svg>
+                <span>GitHub Releases 下载</span>
+              </a>
+
+              <a
+                class="btn btn-secondary btn-lg"
+                href="https://github.com/Entelina/solacut/releases/tag/v0.9.0-beta"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-site-download-cn
+              >
+                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5.6"/>
+                  <path d="M2.6 8h10.8M8 2.4c1.6 1.5 2.4 3.4 2.4 5.6S9.6 12.1 8 13.6C6.4 12.1 5.6 10.2 5.6 8S6.4 3.9 8 2.4z"/>
+                </svg>
+                <span>查看发行说明与校验包</span>
+              </a>
+            </div>
+
+            <div class="deck-channel-note">
+              <span class="deck-channel-dot" data-site-channel-dot aria-hidden="true"></span>
+              <span data-site-channel-text>公测预发封板中 · 点击按钮查看便携包交付与本地运行指引（零 404）</span>
+            </div>
+
+            <div class="demo-callout">
+              <div class="demo-callout-icon" aria-hidden="true">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="5,3.2 12.6,8 5,12.8"/>
+                </svg>
+              </div>
+              <div>
+                <div class="demo-callout-title">免配置 30 秒内置 Demo 工程</div>
+                <p class="demo-callout-text">
+                  首次启动无需填写任何 API Key、无需自备录屏素材。便携包内自带预构建的高光审片示例工程，解压双击即可立即体验 J/K/L 快捷键审片、双语 ASS 字幕排布与 EDL / 竖屏导出全流程。
+                </p>
+              </div>
+            </div>
+
+            <dl class="spec-dl">
+              <div class="spec-dl-item">
+                <dt>系统要求</dt>
+                <dd data-site-platform>Windows 10 / 11 (x64) · 免 Python / 免安装解压即用</dd>
+              </div>
+              <div class="spec-dl-item">
+                <dt>桌面运行时</dt>
+                <dd>系统原生 Edge WebView2（Win11 内置，无 Electron 内存膨胀）</dd>
+              </div>
+              <div class="spec-dl-item">
+                <dt>内置商用语料</dt>
+                <dd class="mono">228,210 条（6 语种 · MIT / CC BY / CC BY-SA）</dd>
+              </div>
+              <div class="spec-dl-item">
+                <dt>可选离线 GPU</dt>
+                <dd>NVIDIA RTX 系列（CUDA 加速 faster-whisper large-v3-turbo）</dd>
+              </div>
+            </dl>
+          </div>
+
+          <!-- 右：SHA-256 校验控制台 + Windows SmartScreen 与语料版权透明说明 -->
+          <div class="deck-verify">
+            <div class="checksum-box">
+              <div class="checksum-head">
+                <span class="checksum-label">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M8 1.8 13.4 4v4.1c0 3.1-2.2 5.4-5.4 6.1-3.2-.7-5.4-3-5.4-6.1V4L8 1.8z"/>
+                  </svg>
+                  <span>SHA-256 完整性校验值</span>
+                </span>
+
+                <span class="copy-control">
+                  <button
+                    type="button"
+                    class="copy-btn"
+                    command="--copy"
+                    commandfor="verify-cmd-code"
+                    data-site-copy-btn
+                    data-copy-idle-label="复制核验命令"
+                  >
+                    <svg class="icon-copy" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="5.2" y="5.2" width="8.2" height="8.2" rx="1"/>
+                      <path d="M10.8 5.2V3.4a.8.8 0 0 0-.8-.8H3.4a.8.8 0 0 0-.8.8V10a.8.8 0 0 0 .8.8h1.8"/>
+                    </svg>
+                    <svg class="icon-check" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="m3.2 8.4 3.1 3.1 6.5-6.8"/>
+                    </svg>
+                    <span data-copy-label>复制核验命令</span>
+                  </button>
+                  <span class="copy-tip" role="status"></span>
+                </span>
+              </div>
+
+              <div class="checksum-code-wrap">
+                <code id="sha256-code" class="checksum-code" data-pending>PENDING-RELEASE · 正式便携包封板后自动固化真实 64 位 SHA-256</code>
+              </div>
+
+              <div class="checksum-cmd">
+                <span>PowerShell 本地完整性核验命令：</span>
+                <code
+                  id="verify-cmd-code"
+                  class="checksum-cmd-line"
+                  data-copy-value="Get-FileHash .\Solacut-v0.9.0-beta-win64-portable.zip -Algorithm SHA256"
+                ><span class="nowrap">Get-FileHash</span><span class="nowrap">.\<span data-site-file-name>Solacut-v0.9.0-beta-win64-portable.zip</span></span><span class="nowrap">-Algorithm SHA256</span></code>
+              </div>
+            </div>
+
+            <div class="transparency-panel">
+              <div class="transparency-item">
+                <h3 class="transparency-heading">
+                  <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M8 2.2 14 13H2L8 2.2zM8 6.4v3.1M8 11.4h.01"/>
+                  </svg>
+                  <span>关于首次运行时的 Windows SmartScreen 蓝色提示</span>
+                </h3>
+                <p class="transparency-body">
+                  Solacut 是个人与社区驱动的免费开源独立软件，公测阶段尚未采购每年数千元的商业 EV 代码签名证书，因此首次双击启动时 Windows Defender SmartScreen 会按默认策略弹出“已保护你的电脑”提示。你可通过上方 SHA-256 哈希核验压缩包零篡改，点击弹窗中的「更多信息 → 仍要运行」，或直接克隆开源仓库自行构建本地运行。
+                </p>
+              </div>
+
+              <div class="transparency-item">
+                <h3 class="transparency-heading">
+                  <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 2.8h7.2L13 5.6v7.6a.8.8 0 0 1-.8.8H3.8a.8.8 0 0 1-.8-.8V2.8z"/>
+                    <path d="M10 2.8v3h3M5.4 8.2h5.2M5.4 10.8h3.6"/>
+                  </svg>
+                  <span>开源许可与语料版权透明声明</span>
+                </h3>
+                <p class="transparency-body">
+                  软件主体与原创六语种游戏术语/反直译词库以 MIT 协议开源；便携包内置的 228,210 条语料严格筛选自 OPUS Tatoeba (CC BY 2.0 FR)、Microsoft NTREX-128 / OPUS QED / WikiMatrix (CC BY-SA 4.0) 等商用无限制开放语料。用户按需在本地拉取的 60 万扩展口语库（含 TED2020 / OpenSubtitles）仅限个人学习与非商业研究。详见
+                  <a class="inline-link" href="https://github.com/Entelina/solacut/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer" data-site-notices>第三方组件与语料署名声明</a>。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 7. 极简页脚 -->
+  <footer class="site-footer">
+    <div class="container site-footer-inner">
+      <div class="footer-brand">
+        <img src="/brand/logo-128.png" alt="" width="22" height="22" class="brand-logo brand-logo--sm" decoding="async">
+        <span class="brand-wordmark" data-site-brand>Solacut</span>
+        <span class="footer-note mono">· <span data-site-domain>solacut.com</span> · © 2026 Solacut Contributors</span>
+      </div>
+
+      <ul class="footer-links" role="list">
+        <li><a class="footer-link" href="https://github.com/Entelina/solacut" target="_blank" rel="noopener noreferrer" data-site-repo>GitHub</a></li>
+        <li><a class="footer-link" href="https://github.com/Entelina/solacut/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer" data-site-notices>第三方组件与语料署名声明</a></li>
+        <li><a class="footer-link" href="https://github.com/Entelina/solacut/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-site-license>MIT 开源协议</a></li>
+        <li><a class="footer-link" href="https://github.com/Entelina/solacut/issues" target="_blank" rel="noopener noreferrer" data-site-issues>公测反馈</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <!-- 原生暗房信息弹窗 1：公测预发交付与本地运行说明（避免未上线占位链跳 404） -->
+  <dialog id="beta-delivery-dialog" class="info-dialog" aria-labelledby="beta-dialog-title">
+    <div class="info-dialog-head">
+      <h2 id="beta-dialog-title" class="info-dialog-title">Solacut <span class="mono" data-site-version>v0.9.0-beta</span> 公测便携包交付说明</h2>
+      <button type="button" class="info-dialog-close" data-dialog-close aria-label="关闭公测交付说明" autofocus>
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true">
+          <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+        </svg>
+      </button>
+    </div>
+    <div class="info-dialog-body">
+      <p>
+        当前版本正处于 Windows 64-bit 便携压缩包最终封板与 SHA-256 签名固化阶段，GitHub Releases 与国内高速镜像直链将在正式发版时通过 <code class="mono">src/config/site.ts</code> 统一开启（零 404 死链）。
+      </p>
+      <ul class="info-dialog-list">
+        <li>便携包内置：精简 Python 运行时、独立 FFmpeg / FFprobe、原生 Edge WebView2 暗房壳、228,210 条商用无限制六语种 FTS5 语料索引与 30 秒免配置 Demo 工程。</li>
+        <li>开发者可在本地直接从源码运行或打包便携发行版：</li>
+      </ul>
+      <code class="info-dialog-code">python desktop_app.py  # 启动原生 Edge WebView2 暗房工作台
+Get-FileHash .\Solacut-v0.9.0-beta-win64-portable.zip -Algorithm SHA256</code>
+    </div>
+    <div class="info-dialog-foot">
+      <button type="button" class="btn btn-primary btn-sm" data-dialog-close>知道了</button>
+    </div>
+  </dialog>
+
+  <!-- 原生暗房信息弹窗 2：开源协议与 60 万语料分层版权透明声明 -->
+  <dialog id="legal-notices-dialog" class="info-dialog" aria-labelledby="notices-dialog-title">
+    <div class="info-dialog-head">
+      <h2 id="notices-dialog-title" class="info-dialog-title">开源许可与第三方语料署名声明</h2>
+      <button type="button" class="info-dialog-close" data-dialog-close aria-label="关闭许可与署名声明" autofocus>
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true">
+          <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+        </svg>
+      </button>
+    </div>
+    <div class="info-dialog-body">
+      <p>
+        Solacut 主体工程代码与原创六语种游戏黑话/反直译术语库以 <strong>MIT License</strong> 开源分发。
+      </p>
+      <ul class="info-dialog-list">
+        <li><strong>便携包内置商用无限制语料（228,210 条）</strong>：严格筛选自 OPUS Tatoeba (CC BY 2.0 FR)、Microsoft NTREX-128、OPUS QED 与 WikiMatrix (CC BY-SA 4.0) 开放许可来源。</li>
+        <li><strong>本地按需扩展口语库（扩展至 600,000 条）</strong>：由用户本机从 OPUS 官方镜像自行拉取（含 TED2020 / OpenSubtitles），仅限个人学习与非商业研究用途。</li>
+        <li><strong>核心音视频与本地推理组件</strong>：FFmpeg / FFprobe（LGPL/GPL 独立进程调用）、faster-whisper（MIT）、Silero VAD（MIT）、pywebview / Edge WebView2（BSD-3-Clause）。</li>
+      </ul>
+    </div>
+    <div class="info-dialog-foot">
+      <button type="button" class="btn btn-primary btn-sm" data-dialog-close>关闭</button>
+    </div>
+  </dialog>
+
+  <!-- 页面唯一集中式礼貌无障碍播报区 -->
+  <div id="sr-announcer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

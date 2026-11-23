@@ -1,0 +1,28 @@
+MIT License
+
+Copyright (c) 2026 Solacut Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+### 数据隐私与第三方许可补充声明 (Privacy & Third-Party Notice)
+
+1. **纯本地运行与 BYOK 隐私承诺**：本软件所有视频分析、字幕审片与切片渲染均在用户本地计算机执行；用户配置的 API Key 仅保存于本地 `.env` 文件，仅用于直接请求用户自行指定的模型接口，开发者不收集、不上传任何用户密钥或视频素材。
+2. **第三方组件与开源语料许可**：随便携安装包附带的第三方二进制工具（如 FFmpeg）及开源平行语料索引遵循其各自原始许可协议（详见 `THIRD_PARTY_NOTICES.md` 与 `data/corpus/SOURCES.md`）。公测/商业分发便携包默认仅包含允许商业使用的开源许可语料（MIT / CC BY 2.0 / CC BY-SA 4.0）。

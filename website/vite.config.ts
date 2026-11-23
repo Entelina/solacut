@@ -1,0 +1,17 @@
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  base: '/',
+  build: {
+    target: 'es2022',
+    outDir: 'dist',
+    assetsDir: 'assets',
+    cssMinify: true,
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: undefined
+      }
+    }
+  }
+});

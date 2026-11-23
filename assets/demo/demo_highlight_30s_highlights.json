@@ -1,0 +1,122 @@
+{
+  "video_path": "input/demo_highlight_30s.mp4",
+  "transcript_json_path": "output/demo_highlight_30s_transcript.json",
+  "highlights_json_path": "output/demo_highlight_30s_highlights.json",
+  "review_md_path": "output/demo_highlight_30s_review.md",
+  "model": "demo-preset",
+  "screen_model": "demo-preset",
+  "polish_model": "demo-preset",
+  "source_language": "en",
+  "target_language": "zh",
+  "subtitle_pair": "en_zh",
+  "total_duration_sec": 30.0,
+  "total_duration_str": "00:30",
+  "highlight_count": 2,
+  "bilingual_subtitles": true,
+  "translated_ok_count": 2,
+  "translation_fallback_count": 0,
+  "selection_plan": {
+    "duration_tier": "示例片段",
+    "target_count": 2,
+    "min_clip_sec": 8,
+    "max_clip_sec": 15
+  },
+  "highlights": [
+    {
+      "rank": 1,
+      "selected": true,
+      "score": 9.4,
+      "start_sec": 3.0,
+      "end_sec": 13.8,
+      "start_str": "00:03",
+      "end_str": "00:14",
+      "duration_sec": 10.8,
+      "title_zh": "《燕云十六声》玩上头被弹幕调侃，主播理直气壮反怼",
+      "title_en": "Hooked on Where Winds Meet & Clapping Back at Chat",
+      "summary_zh": "示例高光 #1：演示习语反直译（sucked me in / God forbid / we're so back）与游戏名精准纠偏。",
+      "reason": "习语反直译与游戏术语纠偏示范片段",
+      "tags": [
+        "反直译示范",
+        "上头吐槽"
+      ],
+      "translation_status": "ok",
+      "subtitles": [
+        {
+          "start_sec": 3.2,
+          "end_sec": 6.4,
+          "text_orig": "Where Winds Meet sucked me in so bad!",
+          "text_src": "Where Winds Meet sucked me in so bad!",
+          "text_tgt": "《燕云十六声》直接让我彻底玩上头了！",
+          "text_en": "Where Winds Meet sucked me in so bad!",
+          "text_zh": "《燕云十六声》直接让我彻底玩上头了！"
+        },
+        {
+          "start_sec": 6.6,
+          "end_sec": 10.2,
+          "text_orig": "God forbid a girl has hobbies, chat!",
+          "text_src": "God forbid a girl has hobbies, chat!",
+          "text_tgt": "老天爷，合着女生还不兴有点个人爱好了是吧弹幕！",
+          "text_en": "God forbid a girl has hobbies, chat!",
+          "text_zh": "老天爷，合着女生还不兴有点个人爱好了是吧弹幕！"
+        },
+        {
+          "start_sec": 10.4,
+          "end_sec": 13.6,
+          "text_orig": "Wait, hold on, we are actually so back!",
+          "text_src": "Wait, hold on, we are actually so back!",
+          "text_tgt": "等等先别急，咱们这状态彻底回来了！",
+          "text_en": "Wait, hold on, we are actually so back!",
+          "text_zh": "等等先别急，咱们这状态彻底回来了！"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "selected": true,
+      "score": 9.7,
+      "start_sec": 17.0,
+      "end_sec": 27.8,
+      "start_str": "00:17",
+      "end_str": "00:28",
+      "duration_sec": 10.8,
+      "title_zh": "丝血极限弹反秒杀Boss！全场起立高呼艺术品",
+      "title_en": "1 HP Parry Clutch Deletes Boss — Absolute Cinema",
+      "summary_zh": "示例高光 #2：演示动作游戏术语（parry / clutch / deleted）与直播热梗（Let him cook / Absolute cinema）。",
+      "reason": "残血极限反杀高燃时刻",
+      "tags": [
+        "极限弹反",
+        "神级演出"
+      ],
+      "translation_status": "ok",
+      "subtitles": [
+        {
+          "start_sec": 17.4,
+          "end_sec": 20.8,
+          "text_orig": "One HP clutch! No way I just parried that!",
+          "text_src": "One HP clutch! No way I just parried that!",
+          "text_tgt": "一滴血极限反杀！我刚才居然真把这刀弹反了！？",
+          "text_en": "One HP clutch! No way I just parried that!",
+          "text_zh": "一滴血极限反杀！我刚才居然真把这刀弹反了！？"
+        },
+        {
+          "start_sec": 21.0,
+          "end_sec": 24.4,
+          "text_orig": "Let him cook! That boss just got deleted!",
+          "text_src": "Let him cook! That boss just got deleted!",
+          "text_tgt": "别打断让他秀！这Boss血条直接原地蒸发！",
+          "text_en": "Let him cook! That boss just got deleted!",
+          "text_zh": "别打断让他秀！这Boss血条直接原地蒸发！"
+        },
+        {
+          "start_sec": 24.6,
+          "end_sec": 27.6,
+          "text_orig": "Clip that right now, absolute cinema!",
+          "text_src": "Clip that right now, absolute cinema!",
+          "text_tgt": "赶紧给我切片！这简直是神级演出艺术品！",
+          "text_en": "Clip that right now, absolute cinema!",
+          "text_zh": "赶紧给我切片！这简直是神级演出艺术品！"
+        }
+      ]
+    }
+  ]
+}

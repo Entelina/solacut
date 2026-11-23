@@ -1,0 +1,112 @@
+/* ============================================================================
+ * Solacut Design Tokens
+ * 严格承袭方案 B 黑曜石几何 Logo 视觉系统 · 零塑料感 · 高对比度精密暗房
+ * ============================================================================ */
+
+/* 注册渐隐遮罩长度，用于单行 Tab 列表横向滚动边缘平滑过渡 */
+@property --fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+/* 注册移动端抽屉遮罩不透明度 */
+@property --drawer-backdrop {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* 核心黑曜石暗房层级 */
+  --bg-canvas: #090A0D;
+  --bg-surface-1: #101216;
+  --bg-surface-2: #15181F;
+  --bg-surface-3: #1B1F28;
+  --bg-header: rgba(9, 10, 13, 0.88);
+
+  /* 1px 瑞士结构细线与交互控件边界（交互边界满足 WCAG 1.4.11 >= 3:1） */
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-strong: rgba(255, 255, 255, 0.16);
+  --grid-line: #1E222C;        /* 不透明精确 1px 瑞士栅格缝隙色，消除半透明叠加色差 */
+  --control-border: #4A5264;
+  --control-border-hover: #6E7A93;
+
+  /* 文本层级：主/次/辅助均严格满足高可读对比度（正文 >= 4.5:1，次级 >= 7:1） */
+  --text-primary: #F4F6F8;
+  --text-secondary: #A2A9B9;   /* 在 #101216 上 ~7.9:1，在 #15181F 上 ~7.4:1 */
+  --text-tertiary: #8E96A8;    /* 在 #15181F 上 ~5.7:1，确保全部辅助文字远超 4.5:1 */
+  --text-muted-deco: #6B7280;  /* 仅用于非关键装饰性标尺/极淡编号 */
+  --text-on-accent: #061017;   /* 在 #49BCEC 上对比度 ~9.6:1 */
+
+  /* 唯一核心强调色：取自方案 B Logo 右上切口冰青冷光，全页面积 < 3% */
+  --accent: #49BCEC;
+  --accent-hover: #38BDF8;
+  --accent-subtle: rgba(73, 188, 236, 0.10);
+  --accent-border: rgba(73, 188, 236, 0.42);
+
+  /* 工程语义辅色（仅限 NLE 波形峰值与 0 漏翻质检徽标克制使用） */
+  --signal-amber: #D99B38;
+  --signal-amber-bg: rgba(217, 155, 56, 0.13);
+  --signal-emerald: #37A855;
+  --signal-emerald-text: #4AC96C;
+  --signal-emerald-bg: rgba(55, 168, 85, 0.13);
+  --signal-fail: #E06C75;
+  --signal-fail-bg: rgba(224, 108, 117, 0.11);
+
+  /* 零外链高定系统字体栈（0ms 首屏渲染，无国外字体阻塞） */
+  --font-sans:
+    "HarmonyOS Sans SC", "MiSans", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei UI", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    "Helvetica Neue", sans-serif;
+  --font-mono:
+    "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Consolas,
+    "Liberation Mono", Menlo, monospace;
+
+  /* 工业尺寸与几何倒角 */
+  --header-height: 56px;
+  --container-max: 1200px;
+  --container-pad: clamp(16px, 3vw, 32px);
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  /* 过渡节奏（仅在 prefers-reduced-motion: no-preference 激活位移动效） */
+  --ease-precision: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+}
+
+/* Windows 高对比度模式 (Forced Colors Mode) 显式系统关键字映射 */
+@media (forced-colors: active) {
+  :root {
+    --bg-canvas: Canvas;
+    --bg-surface-1: Canvas;
+    --bg-surface-2: Canvas;
+    --bg-surface-3: Canvas;
+    --bg-header: Canvas;
+    --hairline: CanvasText;
+    --hairline-strong: CanvasText;
+    --grid-line: CanvasText;
+    --control-border: ButtonText;
+    --control-border-hover: Highlight;
+    --text-primary: CanvasText;
+    --text-secondary: CanvasText;
+    --text-tertiary: CanvasText;
+    --text-on-accent: HighlightText;
+    --accent: Highlight;
+    --accent-hover: Highlight;
+    --accent-border: Highlight;
+    --signal-amber: Highlight;
+    --signal-emerald: Highlight;
+    --signal-emerald-text: Highlight;
+  }
+}

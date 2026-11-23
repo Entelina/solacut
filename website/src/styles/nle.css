@@ -1,0 +1,870 @@
+/* ============================================================================
+ * Micro Solacut NLE Darkroom Workbench (Hero Centerpiece)
+ * 1:1 精密还原达芬奇暗房工作台：无边框顶栏 · 切点栏 · 16:9 安全框监视器 · 精密波形轨
+ * ============================================================================ */
+
+.nle-stage {
+  margin-block-start: clamp(16px, 2vw, 22px);
+}
+
+.nle-window {
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-surface-1);
+  overflow: hidden;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.48);
+}
+
+/* 1. 仿原生无边框桌面顶栏 */
+.nle-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-block-size: 38px;
+  padding: 4px 12px;
+  background-color: #0C0E12;
+  border-block-end: 1px solid var(--hairline);
+  font-size: 0.75rem;
+}
+
+.nle-titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-inline-size: 0;
+}
+
+.nle-app-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: none;
+}
+
+.nle-app-id img {
+  inline-size: 18px;
+  block-size: 18px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 0.5px rgba(255, 255, 255, 0.25));
+}
+
+.nle-menubar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-tertiary);
+}
+
+.nle-menubar-item {
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
+
+.nle-track-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-surface-2);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nle-titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.nle-smpte {
+  padding: 2px 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-canvas);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.nle-qa-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid rgba(55, 168, 85, 0.45);
+  border-radius: var(--radius-xs);
+  background-color: var(--signal-emerald-bg);
+  color: var(--signal-emerald-text);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.nle-win-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid var(--hairline);
+  color: var(--text-tertiary);
+}
+
+/* 2. 主体双区（左切点列表 + 右监视器） */
+.nle-workspace {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  border-block-end: 1px solid var(--hairline);
+}
+
+/* 左侧：高光切点列表 */
+.nle-sidebar {
+  display: flex;
+  flex-direction: column;
+  border-inline-end: 1px solid var(--hairline);
+  background-color: #0D0F14;
+  min-inline-size: 0;
+}
+
+.nle-pane-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-block-size: 36px;
+  padding: 6px 12px;
+  border-block-end: 1px solid var(--hairline);
+  background-color: var(--bg-surface-1);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+
+.nle-clip-list {
+  display: grid;
+  align-content: start;
+  flex: 1 1 auto;
+  list-style: none;
+}
+
+.nle-sidebar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-block-start: 1px solid var(--hairline);
+  background-color: var(--bg-canvas);
+  font-family: var(--font-mono);
+  font-size: 0.65625rem;
+  color: var(--text-tertiary);
+}
+
+.nle-sidebar-foot-val {
+  color: var(--text-secondary);
+}
+
+.nle-clip-btn {
+  display: grid;
+  gap: 5px;
+  inline-size: 100%;
+  min-block-size: 44px;
+  padding: 12px 12px 12px 11px;
+  border: 0;
+  border-block-end: 1px solid var(--hairline);
+  border-inline-start: 2px solid transparent;
+  background-color: transparent;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.nle-clip-btn:hover {
+  background-color: var(--bg-surface-2);
+}
+
+.nle-clip-btn[aria-current="true"] {
+  background-color: var(--bg-surface-2);
+  border-inline-start-color: var(--accent);
+}
+
+.nle-clip-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.nle-clip-rank {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.nle-clip-btn[aria-current="true"] .nle-clip-rank {
+  color: var(--accent);
+}
+
+.nle-clip-lang {
+  padding: 1px 5px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-canvas);
+  color: var(--text-secondary);
+}
+
+.nle-clip-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.nle-clip-row-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+.nle-clip-peak {
+  color: var(--signal-amber);
+}
+
+/* 右侧：16:9 监视器与控制条 */
+.nle-monitor-col {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  background-color: var(--bg-canvas);
+}
+
+.nle-monitor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-block-size: 40px;
+  padding: 6px 12px;
+  border-block-end: 1px solid var(--hairline);
+  background-color: var(--bg-surface-1);
+}
+
+.nle-transport-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nle-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-inline-size: 74px;
+  min-block-size: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--accent-border);
+  background-color: var(--accent-subtle);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.nle-play-btn:hover {
+  background-color: rgba(73, 188, 236, 0.18);
+  border-color: var(--accent);
+}
+
+.nle-scene-spec {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+/* 字幕模式切换组 */
+.nle-sub-modes {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-canvas);
+  padding: 2px;
+  gap: 2px;
+}
+
+.nle-mode-btn {
+  min-block-size: 26px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background-color: transparent;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+
+.nle-mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.nle-mode-btn[aria-pressed="true"] {
+  background-color: var(--bg-surface-3);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+/* 16:9 暗房监视器画布（纯精密测绘几何，无任何彩色光球） */
+.nle-viewport {
+  position: relative;
+  flex: 1 1 auto;
+  aspect-ratio: 16 / 7.4;
+  min-block-size: 288px;
+  max-block-size: 360px;
+  background-color: #06070A;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.026) 1px, transparent 1px);
+  background-size: 32px 32px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: clamp(12px, 1.6vw, 16px);
+}
+
+/* 广播级 90% Action Safe / 80% Title Safe 安全框、9:16 竖屏裁切参考框与中心准星 */
+.nle-safe-frame-outer {
+  position: absolute;
+  inset: 5%;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  pointer-events: none;
+}
+
+.nle-safe-frame-inner {
+  position: absolute;
+  inset: 10%;
+  border: 1px dashed rgba(255, 255, 255, 0.065);
+  pointer-events: none;
+}
+
+/* 广播级 9:16 竖屏裁切安全框中线（克制白灰细线，零发光） */
+.nle-crop-916 {
+  position: absolute;
+  inset-block: 5%;
+  inset-inline-start: 50%;
+  inline-size: 29%;
+  transform: translateX(-50%);
+  border-inline: 1px dashed rgba(73, 188, 236, 0.14);
+  pointer-events: none;
+}
+
+.nle-crop-916::before {
+  content: "9:16 SAFE";
+  position: absolute;
+  inset-block-start: 46%;
+  inset-inline-start: calc(100% + 8px);
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  color: rgba(142, 150, 168, 0.48);
+  white-space: nowrap;
+}
+
+/* 取景器四角精密 L 形刻度角标 */
+.nle-bracket {
+  position: absolute;
+  inline-size: 10px;
+  block-size: 10px;
+  border-color: rgba(255, 255, 255, 0.28);
+  border-style: solid;
+  border-width: 0;
+  pointer-events: none;
+}
+
+.nle-bracket--tl {
+  inset-block-start: 5%;
+  inset-inline-start: 5%;
+  border-block-start-width: 1px;
+  border-inline-start-width: 1px;
+}
+
+.nle-bracket--tr {
+  inset-block-start: 5%;
+  inset-inline-end: 5%;
+  border-block-start-width: 1px;
+  border-inline-end-width: 1px;
+}
+
+.nle-bracket--bl {
+  inset-block-end: 5%;
+  inset-inline-start: 5%;
+  border-block-end-width: 1px;
+  border-inline-start-width: 1px;
+}
+
+.nle-bracket--br {
+  inset-block-end: 5%;
+  inset-inline-end: 5%;
+  border-block-end-width: 1px;
+  border-inline-end-width: 1px;
+}
+
+.nle-hud-rag-compact {
+  display: none;
+}
+
+.nle-crosshair {
+  position: absolute;
+  inset-block-start: 46%;
+  inset-inline-start: 50%;
+  inline-size: 26px;
+  block-size: 26px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.nle-crosshair::before,
+.nle-crosshair::after {
+  content: "";
+  position: absolute;
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.nle-crosshair::before {
+  inset-block-start: 50%;
+  inset-inline: 0;
+  block-size: 1px;
+}
+
+.nle-crosshair::after {
+  inset-inline-start: 50%;
+  inset-block: 0;
+  inline-size: 1px;
+}
+
+/* 监视器顶部 HUD：左 RAG 命中词条 + 右实时声压电平表 */
+.nle-hud-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nle-hud-rag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-inline-size: 72%;
+}
+
+.nle-hud-tag {
+  padding: 2px 7px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-xs);
+  background-color: rgba(9, 10, 13, 0.82);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}
+
+.nle-hud-tag--accent {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+/* 右上角双声道声压峰值仪表 (L / R) */
+.nle-vu-meter {
+  display: grid;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-xs);
+  background-color: rgba(9, 10, 13, 0.86);
+  min-inline-size: 128px;
+}
+
+.nle-vu-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+}
+
+.nle-vu-row {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+}
+
+.nle-vu-track {
+  position: relative;
+  block-size: 5px;
+  background-color: var(--bg-surface-3);
+  overflow: hidden;
+}
+
+.nle-vu-fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  inline-size: 100%;
+  background: linear-gradient(
+    to right,
+    var(--signal-emerald) 0%,
+    var(--signal-emerald) 66%,
+    var(--signal-amber) 66%,
+    var(--signal-amber) 100%
+  );
+  transform-origin: left center;
+  transform: scaleX(0.65);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nle-vu-fill {
+    transition: transform 110ms linear;
+  }
+}
+
+/* 监视器底部：实时双语 ASS 字幕覆层 */
+.nle-subtitle-overlay {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  margin-block-end: 4px;
+  text-align: center;
+}
+
+.nle-sub-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-inline-size: min(92%, 620px);
+  padding: 9px 16px;
+  border-radius: var(--radius-xs);
+  background-color: rgba(6, 7, 10, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.nle-sub-line {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.nle-sub-zh {
+  font-size: clamp(0.9375rem, 1.55vw, 1.1875rem);
+  font-weight: 600;
+  color: #FFFFFF;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+.nle-sub-src {
+  font-family: var(--font-mono);
+  font-size: clamp(0.75rem, 1.05vw, 0.84375rem);
+  color: #CBD2DF;
+}
+
+.nle-sub-box[data-mode="src-top"] {
+  flex-direction: column-reverse;
+}
+
+.nle-sub-box[data-mode="zh-only"] .nle-sub-src {
+  display: none;
+}
+
+/* 3. 底部精密音频波形与时间线轨道 */
+.nle-timeline {
+  background-color: #0B0D11;
+  padding: 10px 14px 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.nle-timeline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+.nle-timeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.nle-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nle-swatch {
+  inline-size: 8px;
+  block-size: 8px;
+  display: inline-block;
+}
+
+.nle-swatch--amber {
+  background-color: var(--signal-amber);
+}
+
+.nle-swatch--accent {
+  background-color: var(--accent);
+}
+
+.nle-timeline-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.nle-kbd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 24px;
+  min-block-size: 24px;
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--control-border);
+  background-color: var(--bg-surface-2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) ease,
+    background-color var(--dur-fast) ease,
+    color var(--dur-fast) ease;
+}
+
+.nle-kbd-btn:hover,
+.nle-kbd-btn[data-active] {
+  border-color: var(--accent);
+  background-color: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.nle-ruler {
+  display: flex;
+  justify-content: space-between;
+  padding-inline: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--text-muted-deco);
+  user-select: none;
+}
+
+/* 波形画布与冰青播放头交互轨 */
+.nle-waveform-track {
+  position: relative;
+  block-size: 76px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-xs);
+  background-color: #08090C;
+  overflow: hidden;
+  /* 允许手机端纵向滚屏，横向用于拖拽播放头 */
+  touch-action: pan-y;
+  cursor: ew-resize;
+}
+
+.nle-waveform-canvas {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+/* 冰青色播放头（左偏移通过 --playhead-pct 驱动） */
+.nle-playhead {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: var(--playhead-pct, 42%);
+  inline-size: 2px;
+  margin-inline-start: -1px;
+  background-color: var(--accent);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.nle-playhead::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  border-inline: 5px solid transparent;
+  border-block-start: 7px solid var(--accent);
+}
+
+/* 叠加透明原生 range 滑块，提供 100% 键盘方向键与屏幕阅读器进度拖拽能力 */
+.nle-scrub-range {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+  z-index: 4;
+}
+
+.nle-waveform-track:has(.nle-scrub-range:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 响应式：中小屏上下排布，保持交互流畅无溢出 */
+@media (max-width: 960px) {
+  .nle-menubar,
+  .nle-win-controls {
+    display: none;
+  }
+
+  .nle-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .nle-sidebar {
+    order: 2;
+    border-inline-end: 0;
+    border-block-start: 1px solid var(--hairline);
+  }
+
+  .nle-clip-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nle-clip-btn:nth-child(odd) {
+    border-inline-end: 1px solid var(--hairline);
+  }
+}
+
+@media (max-width: 640px) {
+  .nle-track-chip,
+  .nle-qa-chip,
+  .nle-scene-spec,
+  .nle-crop-916,
+  .nle-timeline-keys {
+    display: none;
+  }
+
+  .nle-clip-list {
+    grid-template-columns: 1fr;
+  }
+
+  .nle-clip-btn:nth-child(odd) {
+    border-inline-end: 0;
+  }
+
+  .nle-hud-rag {
+    display: none;
+  }
+
+  .nle-hud-rag-compact {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .nle-vu-meter {
+    margin-inline-start: auto;
+    min-inline-size: 128px;
+  }
+
+  .nle-ruler span:nth-child(even) {
+    display: none;
+  }
+
+  .nle-viewport {
+    aspect-ratio: auto;
+    min-block-size: 232px;
+    max-block-size: none;
+  }
+
+  .nle-monitor-toolbar {
+    gap: 8px;
+  }
+
+  .nle-sub-modes {
+    flex: 1 1 auto;
+    justify-content: space-between;
+  }
+
+  .nle-mode-btn {
+    flex: 1 1 0;
+    padding: 0 6px;
+  }
+}
+
+@media (pointer: coarse) {
+  .nle-play-btn,
+  .nle-mode-btn {
+    min-block-size: 44px;
+  }
+
+  .nle-kbd-btn {
+    min-inline-size: 36px;
+    min-block-size: 36px;
+  }
+}
+
+@media (forced-colors: active) {
+  .nle-clip-btn[aria-current="true"] {
+    border-inline-start: 3px solid Highlight;
+  }
+
+  .nle-mode-btn[aria-pressed="true"] {
+    border-color: Highlight;
+  }
+
+  .nle-playhead {
+    background-color: Highlight;
+    forced-color-adjust: none;
+  }
+}

@@ -1,0 +1,387 @@
+/* ============================================================================
+ * 6-Language × 600K Corpus Translation Comparison Deck
+ * 严格落实 modern-web-guidance: tabs & search-hidden-content
+ * - 单行横向滚动 tablist（绝不换行）+ @property 边缘渐隐
+ * - 选中下划线使用伪元素 border-block-end（Forced Colors Mode 可见）
+ * - panel 外层零 padding/border/margin/bg，全部写入 .translation-panel-inner
+ * - 全部 panel 置入同一 Grid 单元格避免 hidden="until-found" 留下空条
+ * ============================================================================ */
+
+.translation-deck {
+  border: 1px solid var(--grid-line);
+  background-color: var(--bg-surface-1);
+}
+
+.tablist-bar {
+  border-block-end: 1px solid var(--grid-line);
+  background-color: var(--bg-canvas);
+}
+
+/* 单行横向滚动容器 + 渐隐遮罩 */
+.translation-tablist {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: inline proximity;
+  scroll-padding-inline: 2.5rem;
+  scrollbar-width: none;
+
+  --fade-size: 2.5rem;
+  --fade-dir: right;
+  --fade-start-pos: 0;
+  --fade-end-pos: 100%;
+
+  mask:
+    linear-gradient(#000, #000) no-clip subtract,
+    linear-gradient(to var(--fade-dir), #000, transparent) var(--fade-start-pos) 0 / var(--fade-start) 100% no-repeat no-clip,
+    linear-gradient(to var(--fade-dir), transparent, #000) var(--fade-end-pos) 0 / var(--fade-end) 100% no-repeat no-clip;
+}
+
+.translation-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+@supports (animation-timeline: scroll(self inline)) {
+  .translation-tablist {
+    animation: tab-reveal-fade-start linear both, tab-hide-fade-end linear both;
+    animation-timeline: scroll(self inline);
+    animation-range: 0 var(--fade-size), calc(100% - var(--fade-size)) 100%;
+  }
+
+  @keyframes tab-reveal-fade-start {
+    to {
+      --fade-start: var(--fade-size);
+    }
+  }
+
+  @keyframes tab-hide-fade-end {
+    from {
+      --fade-end: var(--fade-size);
+    }
+  }
+}
+
+/* 不支持 scroll-driven animation 时通过 IntersectionObserver 回退 */
+@supports not (animation-timeline: scroll(self inline)) {
+  .translation-tablist {
+    transition: --fade-start 180ms ease, --fade-end 180ms ease;
+  }
+
+  .translation-tablist.more-start {
+    --fade-start: var(--fade-size);
+  }
+
+  .translation-tablist.more-end {
+    --fade-end: var(--fade-size);
+  }
+}
+
+/* Tab 按钮：桌面 6 等宽严丝合缝铺满瑞士栏；窄屏单行横向滚动；不改变字重/尺寸防止抖动 */
+.translation-tab {
+  position: relative;
+  flex: 1 0 auto;
+  scroll-snap-align: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-block-size: 48px;
+  padding: 0 18px;
+  border: 0;
+  border-inline-end: 1px solid var(--grid-line);
+  background-color: transparent;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+
+.translation-tab:last-child {
+  border-inline-end: 0;
+}
+
+.translation-tab:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-surface-1);
+}
+
+.translation-tab-code {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+/* 强制用伪元素 border-block-end 指示选中态（兼容 Forced Colors Mode，不依赖颜色或 box-shadow） */
+.translation-tab[aria-selected="true"] {
+  color: var(--text-primary);
+  background-color: var(--bg-surface-1);
+}
+
+.translation-tab[aria-selected="true"] .translation-tab-code {
+  color: var(--accent);
+}
+
+.translation-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  border-block-end: 2px solid var(--accent);
+}
+
+/* 所有面板叠放于同一 Grid 单元格，杜绝 hidden="until-found" 触发多余 gap，且锁稳高度防 CLS 抖动 */
+.translation-panels {
+  display: grid;
+  min-block-size: 360px;
+}
+
+.translation-panel {
+  grid-area: 1 / 1;
+  align-self: start;
+  /* MANDATORY: 外层 panel 严禁设置 padding / border / margin / background */
+}
+
+/* 面板实际视觉容器 */
+.translation-panel-inner {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-block-size: 360px;
+  gap: 0;
+}
+
+/* 原声金句头部条 */
+.case-source-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: clamp(18px, 2.4vw, 24px) clamp(18px, 2.6vw, 28px);
+  border-block-end: 1px solid var(--hairline);
+  background-color: var(--bg-surface-1);
+}
+
+.case-source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-block-end: 8px;
+}
+
+.case-direction {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.case-context {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.case-source-quote {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: clamp(1rem, 1.5vw, 1.1875rem);
+  font-weight: 500;
+  line-height: 1.55;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  quotes: none;
+}
+
+/* 左右实时对比两栏 */
+.case-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background-color: var(--grid-line);
+}
+
+.case-col {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 12px;
+  padding: clamp(20px, 2.6vw, 28px);
+}
+
+.case-col--mt {
+  background-color: #0D0F13;
+}
+
+.case-col--solacut {
+  background-color: var(--bg-surface-2);
+  position: relative;
+}
+
+/* 右侧 Solacut 栏顶部 2px 冰青冷光指示线（克制强调） */
+.case-col--solacut::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  border-block-start: 2px solid var(--accent);
+}
+
+.case-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.case-col-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.case-col-label--mt {
+  color: var(--text-tertiary);
+}
+
+.case-col-label--solacut {
+  color: var(--accent);
+}
+
+.case-col-tag {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-tertiary);
+}
+
+.case-col-tag--fail {
+  border-color: rgba(224, 108, 117, 0.35);
+  background-color: var(--signal-fail-bg);
+  color: var(--signal-fail);
+}
+
+.case-col-tag--pass {
+  border-color: rgba(55, 168, 85, 0.45);
+  background-color: var(--signal-emerald-bg);
+  color: var(--signal-emerald-text);
+}
+
+.case-output {
+  font-size: clamp(1rem, 1.5vw, 1.1875rem);
+  line-height: 1.55;
+  font-weight: 500;
+}
+
+.case-output--mt {
+  color: var(--text-secondary);
+}
+
+.case-output--solacut {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.case-note {
+  padding-block-start: 12px;
+  border-block-start: 1px solid var(--hairline);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+
+.case-col--solacut .case-note {
+  color: var(--text-secondary);
+}
+
+/* 底部真实工程检索遥测条 */
+.case-telemetry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 18px;
+  padding: 12px clamp(18px, 2.6vw, 28px);
+  border-block-start: 1px solid var(--hairline);
+  background-color: var(--bg-canvas);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.case-telemetry-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  color: var(--text-secondary);
+}
+
+.case-telemetry-sep {
+  color: var(--text-muted-deco);
+  user-select: none;
+}
+
+.case-telemetry-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.case-telemetry-key {
+  color: var(--text-tertiary);
+}
+
+.case-glossary-hits {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.case-hit-chip {
+  padding: 2px 7px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-xs);
+  background-color: var(--bg-surface-1);
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+
+@media (max-width: 860px) {
+  .translation-tab {
+    flex: none;
+    padding: 0 14px;
+  }
+
+  .translation-tab:last-child {
+    border-inline-end: 1px solid var(--grid-line);
+  }
+}
+
+@media (max-width: 780px) {
+  .translation-panels,
+  .translation-panel-inner {
+    min-block-size: 0;
+  }
+
+  .case-compare-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .case-telemetry-sep {
+    display: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .translation-tab[aria-selected="true"]::after {
+    border-block-end-color: Highlight;
+  }
+
+  .case-col--solacut::before {
+    border-block-start-color: Highlight;
+  }
+}

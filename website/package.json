@@ -1,0 +1,17 @@
+{
+  "name": "solacut-website",
+  "private": true,
+  "version": "0.9.0",
+  "type": "module",
+  "description": "Solacut 官方网站 — 原生 Windows 专业 NLE 游戏高光切片与六语种 60 万语料母语级精翻工作台",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "video_path": "input/demo_highlight_30s.mp4",
+  "wav_path": "output/demo_highlight_30s_16k.wav",
+  "audio_stream": 0,
+  "vocal_bandpass": true,
+  "top_percent": 15.0,
+  "total_duration_sec": 30.0,
+  "rms_threshold": 0.12,
+  "peak_segments": [
+    {
+      "start_sec": 3.0,
+      "end_sec": 14.0,
+      "peak_rms": 0.35,
+      "mean_rms": 0.28
+    },
+    {
+      "start_sec": 17.0,
+      "end_sec": 28.0,
+      "peak_rms": 0.41,
+      "mean_rms": 0.32
+    }
+  ],
+  "diagnostics": {
+    "grade": "S",
+    "grade_label": "S级·高能紧凑",
+    "peak_count": 2,
+    "burst_ratio": 3.4,
+    "strong_peaks_per_hour": 240,
+    "golden_bucket_label": "00:00–00:30",
+    "advice": "内置 30 秒示例工程：已预置 2 段多语种高光，可直接审片、改字幕并试导出！",
+    "recommendation": {
+      "asr_mode": "peaks",
+      "mode": "peaks",
+      "top_k_peaks": 2
+    },
+    "hourly_heatmap": [
+      {
+        "label": "00:00–00:30",
+        "start_sec": 0.0,
+        "end_sec": 30.0,
+        "strong_peaks": 2,
+        "total_peaks": 2,
+        "intensity": 1.0
+      }
+    ]
+  }
+}

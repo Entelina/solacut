@@ -1,0 +1,1465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- 默认达芬奇专业纯黑暗房，支持在设置中切换日间/跟随系统，首帧防 FOUC -->
+  <meta name="color-scheme" content="dark">
+  <script>
+    try {
+      const savedScheme = localStorage.getItem("ghc_color_scheme");
+      if (savedScheme === "light" || savedScheme === "dark") {
+        document.querySelector('meta[name="color-scheme"]').content = savedScheme;
+      } else if (savedScheme === "system") {
+        document.querySelector('meta[name="color-scheme"]').content = "light dark";
+      }
+    } catch (e) {}
+  </script>
+  <title>Solacut</title>
+  <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
+  <link rel="icon" type="image/png" sizes="128x128" href="/static/brand/logo.png">
+  <link rel="stylesheet" href="/static/styles.css?v=solacut1">
+</head>
+<body>
+  <!-- 原生无边框桌面窗口 8 向隐形缩放热区 -->
+  <div id="win-resize-handles" class="win-resize-handles hidden" aria-hidden="true">
+    <div class="win-edge edge-n" data-edge="top"></div>
+    <div class="win-edge edge-s" data-edge="bottom"></div>
+    <div class="win-edge edge-w" data-edge="left"></div>
+    <div class="win-edge edge-e" data-edge="right"></div>
+    <div class="win-edge edge-nw" data-edge="top-left"></div>
+    <div class="win-edge edge-ne" data-edge="top-right"></div>
+    <div class="win-edge edge-sw" data-edge="bottom-left"></div>
+    <div class="win-edge edge-se" data-edge="bottom-right"></div>
+  </div>
+
+  <div class="app-shell">
+    <!-- 顶部 34px 无边框标题栏（含对标 DaVinci Resolve 21.1 原生应用菜单栏 + 大片空白拖拽区） -->
+    <header id="app-topbar" class="topbar">
+      <div class="topbar-left">
+        <div class="brand" aria-label="Solacut">
+          <img
+            src="/static/brand/logo.png"
+            alt="Solacut"
+            width="20"
+            height="20"
+            class="brand-logo-img"
+            decoding="async"
+          >
+          <span class="brand-name">Solacut</span>
+        </div>
+
+        <div id="app-menubar" class="app-menubar" role="menubar" aria-label="应用菜单"></div>
+
+        <span class="mini-sep topbar-dir-sep" aria-hidden="true"></span>
+
+        <button
+          type="button"
+          id="btn-dirs-popover"
+          class="nle-chip-btn topbar-dir-btn"
+          popovertarget="dirs-popover"
+          title="切换输入 / 输出目录"
+        >
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+            <path d="M2 4.2h4.2l1.2 1.3H14v6.7a.8.8 0 0 1-.8.8H2.8a.8.8 0 0 1-.8-.8V4.2z"/>
+          </svg>
+          <span id="dir-summary-text" class="dir-summary mono-num">input → output</span>
+        </button>
+
+        <button type="button" id="btn-scan-refresh" class="nle-icon-btn" title="刷新素材目录" aria-label="刷新素材目录">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+            <path d="M13 8a5 5 0 1 1-1.3-3.4M13 2.8v2.6h-2.6"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 中央纯空白拖拽区（双击最大化/还原窗口） -->
+      <div class="topbar-drag-spacer" aria-hidden="true"></div>
+
+      <!-- 右侧：撤销重做 + 任务状态灯 + 快捷键 + 设置 + 原生桌面窗控 -->
+      <div class="topbar-right">
+        <div class="history-quick-group" role="group" aria-label="撤销与历史">
+          <button type="button" id="btn-undo" class="nle-icon-btn" disabled title="撤销 (Ctrl+Z)" aria-label="撤销">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M5.5 4.2L2.5 7l3 2.8M2.8 7h6.4a3.5 3.5 0 1 1 0 7H7"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-redo" class="nle-icon-btn" disabled title="重做 (Ctrl+Shift+Z / Ctrl+Y)" aria-label="重做">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M10.5 4.2l3 2.8-3 2.8M13.2 7H6.8a3.5 3.5 0 1 0 0 7H9"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-focus-history" class="nle-icon-btn" title="打开操作历史记录 (Ctrl+H)" aria-label="操作历史记录">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <circle cx="8" cy="8" r="5.6"/>
+              <path d="M8 4.8v3.4l2.3 1.4"/>
+            </svg>
+          </button>
+        </div>
+
+        <span class="mini-sep" aria-hidden="true"></span>
+
+        <button type="button" id="global-task-pill" class="task-pill" data-state="idle" title="打开任务队列与实时日志">
+          <span class="task-dot"></span>
+          <span id="global-task-text">就绪</span>
+        </button>
+
+        <button
+          type="button"
+          id="btn-open-shortcuts"
+          class="nle-icon-btn"
+          command="show-modal"
+          commandfor="shortcuts-dialog"
+          title="快捷键速查 ( ? )"
+          aria-label="快捷键速查"
+        >
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+            <circle cx="8" cy="8" r="5.8"/>
+            <path d="M6.4 6.2a1.65 1.65 0 0 1 3.15.65c0 1.05-1.55 1.25-1.55 2.35M8 11.6h.01"/>
+          </svg>
+        </button>
+
+        <button
+          type="button"
+          id="btn-open-settings"
+          class="nle-icon-btn"
+          command="show-modal"
+          commandfor="settings-dialog"
+          title="接口与外观设置"
+          aria-label="接口与外观设置"
+        >
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.2"/>
+            <path d="M8 1.9v1.5M8 12.6v1.5M1.9 8h1.5M12.6 8h1.5M3.7 3.7l1.1 1.1M11.2 11.2l1.1 1.1M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1"/>
+          </svg>
+        </button>
+
+        <div id="desktop-window-controls" class="win-controls hidden" role="group" aria-label="窗口控制">
+          <button type="button" id="btn-win-fullscreen" class="win-ctrl-btn" title="无边框全屏 (F11)" aria-label="无边框全屏">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-win-min" class="win-ctrl-btn" title="最小化" aria-label="最小化">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M3 8.5h10"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-win-max" class="win-ctrl-btn" title="最大化 / 还原" aria-label="最大化或还原">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="3" y="3" width="10" height="10" rx="0.6"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-win-close" class="win-ctrl-btn close" title="关闭" aria-label="关闭应用">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- 目录配置弹出浮层（原生 popover + CSS Anchor Positioning） -->
+    <div id="dirs-popover" popover="auto" class="nle-popover dirs-popover" aria-label="目录配置">
+      <div class="popover-head">
+        <strong>工作目录</strong>
+        <button type="button" id="btn-close-dirs-popover" class="nle-btn-xs">完成</button>
+      </div>
+      <div class="nle-field">
+        <label for="input-dir-field">输入目录</label>
+        <div class="input-action-row">
+          <input id="input-dir-field" type="text" spellcheck="false" title="直播录屏所在目录">
+          <button type="button" id="btn-browse-input" class="nle-btn-xs">浏览</button>
+        </div>
+      </div>
+      <div class="nle-field">
+        <label for="output-dir-field">输出目录</label>
+        <div class="input-action-row">
+          <input id="output-dir-field" type="text" spellcheck="false" title="高光方案与导出成片保存目录">
+          <button type="button" id="btn-browse-output" class="nle-btn-xs">浏览</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 面板显隐与布局重置浮层（从底栏锚点向上展开） -->
+    <div id="panels-popover" popover="auto" class="nle-popover panels-popover anchor-up" aria-label="面板显隐">
+      <div class="popover-head">
+        <strong>面板</strong>
+        <button type="button" id="btn-popover-reset-layout" class="nle-btn-xs">重置</button>
+      </div>
+      <div id="panels-toggle-list" class="panels-toggle-list"></div>
+    </div>
+
+    <!-- 时间线视图选项浮层（对标 DaVinci Timeline View Options） -->
+    <div id="tl-view-options-popover" popover="auto" class="nle-popover tl-view-opts-pop" aria-label="时间线视图选项">
+      <div class="popover-head">
+        <strong>时间线视图选项</strong>
+      </div>
+      <div class="tl-opts-group">
+        <label class="nle-check">
+          <input type="checkbox" id="chk-tl-opt-full-wave">
+          <span>全高正向波形 (Full Waveform)</span>
+        </label>
+        <label class="nle-check">
+          <input type="checkbox" id="chk-tl-opt-clip-names" checked>
+          <span>显示切片名称与评分</span>
+        </label>
+        <label class="nle-check">
+          <input type="checkbox" id="chk-tl-opt-a1-vis" checked>
+          <span>显示 A1 音频波形轨</span>
+        </label>
+      </div>
+      <div class="nle-field">
+        <span class="field-label">轨道高度</span>
+        <div class="nle-seg tl-height-seg" role="group" aria-label="轨道高度">
+          <button type="button" class="seg-btn" data-tl-height="compact">紧凑</button>
+          <button type="button" class="seg-btn active" data-tl-height="normal">标准</button>
+          <button type="button" class="seg-btn" data-tl-height="tall">高波形</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 纯黑炭灰自由停靠二叉树工作区挂载根 -->
+    <main id="dock-root" class="dock-root" aria-label="剪辑工作区"></main>
+
+    <!-- 底部 28px 达芬奇风格工作区导航与状态合体栏 -->
+    <footer id="app-statusbar" class="statusbar">
+      <div class="status-left mono-num">
+        <span id="save-status-text" class="status-item">已同步</span>
+        <span class="status-sep">/</span>
+        <span id="status-selection-text" class="status-item">素材 0</span>
+      </div>
+
+      <!-- 居中达芬奇经典工作区切页条 -->
+      <div id="workspace-toolbar" class="workspace-toolbar" role="toolbar" focusgroup="toolbar wrap" aria-label="工作区页面">
+        <div class="preset-group" role="group" aria-label="工作区预设">
+          <button type="button" class="preset-btn" data-preset="edit" aria-pressed="true" title="剪辑工作区">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="2" y="2.5" width="12" height="11" rx="0.8"/><path d="M2 9h12M6 2.5V9"/>
+            </svg>
+            <span>剪辑</span>
+          </button>
+          <button type="button" class="preset-btn" data-preset="review" aria-pressed="false" title="审片工作区">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="2" y="2.5" width="12" height="11" rx="0.8"/><path d="M8.5 2.5v11"/>
+            </svg>
+            <span>审片</span>
+          </button>
+          <button type="button" class="preset-btn" data-preset="subtitle" aria-pressed="false" title="字幕工作区">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="2" y="2.5" width="12" height="11" rx="0.8"/><path d="M7.5 2.5v11M9.5 6h2.5M9.5 8.5h2.5M9.5 11h2"/>
+            </svg>
+            <span>字幕</span>
+          </button>
+          <button type="button" class="preset-btn" data-preset="deliver" aria-pressed="false" title="交付工作区">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M8 10V2.8M5 5.5L8 2.5l3 3M2.8 9.8v3a.7.7 0 0 0 .7.7h9a.7.7 0 0 0 .7-.7v-3"/>
+            </svg>
+            <span>交付</span>
+          </button>
+        </div>
+
+        <span class="toolbar-sep" role="separator" aria-orientation="vertical"></span>
+
+        <div class="preset-group" role="group" aria-label="面板管理">
+          <button
+            type="button"
+            id="btn-panels-popover"
+            class="nle-chip-btn compact-chip"
+            popovertarget="panels-popover"
+            title="显示或隐藏工作区面板"
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="2" y="2.5" width="12" height="11" rx="0.8"/><path d="M6.2 2.5v11M10.5 2.5v11"/>
+            </svg>
+            <span>面板</span>
+          </button>
+          <button
+            type="button"
+            id="btn-reset-layout"
+            class="nle-icon-btn"
+            title="重置当前工作区布局"
+            aria-label="重置当前工作区布局"
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M3.5 8a4.5 4.5 0 1 0 1.2-3.1M3.5 2.8v2.7h2.7"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="status-right">
+        <span id="status-live-msg" class="status-live" role="status" aria-live="polite"></span>
+        <span id="status-active-pane" class="status-item mono-num">监视器</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- 隐藏的离屏保态面板停泊仓（DockEngine 使用原生 moveBefore 原子移入/移出） -->
+  <div id="dock-parking" class="dock-parking" aria-hidden="true">
+
+    <!-- 面板 1：媒体池 (media · 缩略图网格 / 详情列表双视图 + 筛选排序) -->
+    <section id="pane-media" class="nle-pane pane-media">
+      <div class="pane-toolbar">
+        <input id="video-search-input" class="nle-search-input" type="search" placeholder="筛选素材..." aria-label="筛选素材">
+        <span id="video-count-badge" class="nle-badge mono-num" title="素材总数">0</span>
+        <div class="nle-seg media-view-seg" role="group" aria-label="媒体池视图">
+          <button type="button" id="btn-media-view-grid" class="seg-btn icon-only" data-view="grid" title="缩略图网格视图" aria-label="缩略图视图">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="2" y="2.5" width="5" height="4.5" rx="0.6"/><rect x="9" y="2.5" width="5" height="4.5" rx="0.6"/>
+              <rect x="2" y="9" width="5" height="4.5" rx="0.6"/><rect x="9" y="9" width="5" height="4.5" rx="0.6"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-media-view-list" class="seg-btn icon-only active" data-view="list" title="紧凑列表视图" aria-label="列表视图">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="media-filter-bar">
+        <select id="sel-media-stage-filter" class="nle-select-xs" title="按状态筛选" aria-label="按状态筛选">
+          <option value="all" selected>全部状态</option>
+          <option value="pending">待分析</option>
+          <option value="analyzed">已粗筛</option>
+          <option value="exported">已出片</option>
+        </select>
+        <select id="sel-media-sort" class="nle-select-xs" title="素材排序" aria-label="素材排序">
+          <option value="name" selected>按名称</option>
+          <option value="grade">按评级</option>
+          <option value="size">按大小</option>
+        </select>
+        <label class="nle-check compact" title="全选 / 取消全选当前列表">
+          <input type="checkbox" id="chk-select-all-videos">
+          <span>全选</span>
+        </label>
+      </div>
+      <div id="video-list" class="video-list scroller" role="list">
+        <div class="empty-hint">空目录</div>
+      </div>
+      <!-- 媒体池底部精确批量操作栏（明确标识作用对象数量，避免顶栏误触） -->
+      <div class="pane-footer-bar">
+        <span id="media-checked-label" class="muted-label mono-num">当前视频</span>
+        <div class="toolbar-cluster">
+          <button type="button" id="btn-batch-diagnose" class="nle-btn-xs icon-text" title="零API费用音频体检（已勾选或当前视频）">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M2 9h2.6l1.5-4.5 2.4 7 1.6-4L11.4 9H14"/>
+            </svg>
+            <span>体检</span>
+          </button>
+          <button type="button" id="btn-batch-analyze" class="nle-btn-xs primary-subtle icon-text" title="AI 高光粗筛（已勾选或当前视频）">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M8 2.2l1.3 4.5 4.5 1.3-4.5 1.3L8 13.8l-1.3-4.5L2.2 8l4.5-1.3L8 2.2z"/>
+            </svg>
+            <span>粗筛</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 面板 2：自研 60fps 节目监视器 + 实时 L/R dBFS 电平表 (monitor) -->
+    <section id="pane-monitor" class="nle-pane pane-monitor">
+      <div class="monitor-hud">
+        <div class="monitor-title-wrap">
+          <span id="hud-video-name" class="hud-file">NO SIGNAL</span>
+          <span id="hud-tech-badge" class="tech-badge mono-num hidden"></span>
+          <span id="hud-clip-title" class="hud-clip"></span>
+        </div>
+        <div class="monitor-hud-right">
+          <select id="sel-monitor-zoom" class="nle-select-xs monitor-mini-sel mono-num" title="监看缩放" aria-label="监看缩放">
+            <option value="fit" selected>Fit</option>
+            <option value="50">50%</option>
+            <option value="100">100%</option>
+            <option value="150">150%</option>
+          </select>
+          <label class="icon-toggle-btn" title="快速开关安全框">
+            <input type="checkbox" id="chk-safe-916">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="4.5" y="1.8" width="7" height="12.4" rx="0.8"/>
+              <path d="M2 5v6M14 5v6"/>
+            </svg>
+          </label>
+          <select id="sel-safe-mode" class="nle-select-xs monitor-mini-sel mono-num" title="安全框比例 (Safe Area)" aria-label="安全框比例">
+            <option value="off" selected>安全框 关</option>
+            <option value="9:16">9:16 竖屏</option>
+            <option value="4:5">4:5 竖屏</option>
+            <option value="1:1">1:1 方屏</option>
+            <option value="title">动作/标题</option>
+          </select>
+          <button type="button" id="btn-monitor-cinema" class="nle-icon-btn" aria-pressed="false" title="影院全屏预览 (P / Esc退出)" aria-label="影院全屏">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="2" y="3" width="12" height="10" rx="0.8"/>
+              <path d="M5 6V5h1.5M11 6V5H9.5M5 10v1h1.5M11 10v1H9.5"/>
+            </svg>
+          </button>
+          <span id="hud-shuttle-badge" class="shuttle-badge mono-num hidden">1.0x</span>
+          <button type="button" id="hud-time-display" class="tc-readout mono-num" title="单击直输时码 · 右键复制/粘贴 SMPTE">00:00:00:00</button>
+          <span id="hud-duration-display" class="tc-duration mono-num">00:00:00:00</span>
+        </div>
+      </div>
+
+      <!-- 主监看舞台：纯黑画布（彻底移除原生 <video controls>）+ 右侧 28px 实时立体声 dBFS 电平表 -->
+      <div class="monitor-stage">
+        <div id="monitor-video-frame" class="video-frame">
+          <video id="review-video" preload="metadata" playsinline></video>
+
+          <!-- 9:16 竖屏裁切安全框与顶标预演层 -->
+          <div id="safe-guide-916" class="safe-guide-916 hidden" aria-hidden="true">
+            <div class="safe-mask-top"></div>
+            <div class="safe-mask-bottom"></div>
+            <div class="safe-mask-left"></div>
+            <div class="safe-mask-right"></div>
+            <div class="safe-crop-box">
+              <span class="safe-crop-tag mono-num">9:16</span>
+              <div class="safe-title-band"></div>
+              <div class="safe-sub-line"></div>
+            </div>
+          </div>
+
+          <!-- 真实 ASS 风格双语字幕叠层（不再给原生控件让位悬半空） -->
+          <div id="video-sub-overlay" class="video-sub-overlay hidden" aria-live="off">
+            <div id="overlay-sub-zh" class="overlay-sub-zh"></div>
+            <div id="overlay-sub-en" class="overlay-sub-en"></div>
+          </div>
+        </div>
+
+        <aside class="audio-meter-rail" title="L/R 实时 dBFS 电平表（点击复位 0dB Clip 爆音灯）">
+          <canvas id="monitor-audio-meter" class="audio-meter-canvas"></canvas>
+        </aside>
+      </div>
+
+      <!-- 当前片段局部微型进度槽（22px 高：入出点高亮 + 字幕分布 + 达芬奇红播放头 Scrubbing） -->
+      <div class="monitor-scrubber-bar">
+        <canvas id="monitor-clip-scrubber" class="clip-scrubber-canvas" title="拖动红线精准定位播放头"></canvas>
+      </div>
+
+      <!-- 居中专业 1.25px 几何 SVG 走带栏 -->
+      <div class="monitor-transport">
+        <div class="transport-group">
+          <button type="button" id="btn-mark-in" class="nle-icon-btn" title="设为入点 (I)" aria-label="设为入点">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M6.5 3H4v10h2.5M9 8h3.5"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-mark-out" class="nle-icon-btn" title="设为出点 (O)" aria-label="设为出点">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M9.5 3H12v10H9.5M3.5 8H7"/>
+            </svg>
+          </button>
+          <span class="mini-sep" aria-hidden="true"></span>
+          <label class="icon-toggle-btn" title="循环播放当前片段 (M)">
+            <input type="checkbox" id="chk-loop-segment">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M12.5 6.2A4.5 4.5 0 0 0 4.8 4.4M3.5 9.8a4.5 4.5 0 0 0 7.7 1.8M12.5 3.5v2.8H9.7M3.5 12.5V9.7h2.8"/>
+            </svg>
+          </label>
+          <label class="icon-toggle-btn" title="播到出点自动暂停">
+            <input type="checkbox" id="chk-auto-pause-end" checked>
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M3.5 8h7M12.5 4v8M8.2 5.4L10.8 8l-2.6 2.6"/>
+            </svg>
+          </label>
+        </div>
+
+        <!-- 居中主走带按键组 -->
+        <div class="transport-group transport-center">
+          <button type="button" id="btn-jump-clip-start" class="nle-icon-btn" title="跳回入点重播 ( / 或 Shift+I )" aria-label="跳回入点">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M3.5 3.5v9M12.5 3.5L6.5 8l6 4.5V3.5z"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-step-prev-frame" class="nle-icon-btn" title="后退 1 帧 (←)" aria-label="后退一帧">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M5.5 3.8v8.4M11.5 3.8L7 8l4.5 4.2"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-shuttle-rev" class="nle-icon-btn" title="反向加速梭巡 (J)" aria-label="倒放">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M8.5 3.8L3.5 8l5 4.2V3.8zM13.5 3.8L8.5 8l5 4.2V3.8z"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-play-toggle" class="nle-icon-btn play-toggle-btn" data-playing="false" title="播放 / 暂停 (Space)" aria-label="播放">
+            <svg class="ic-play" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+              <path d="M4.2 3l8.2 5-8.2 5V3z"/>
+            </svg>
+            <svg class="ic-pause" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+              <rect x="4" y="3" width="2.8" height="10" rx="0.5"/><rect x="9.2" y="3" width="2.8" height="10" rx="0.5"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-shuttle-fwd" class="nle-icon-btn" title="正向加速梭巡 (L)" aria-label="快进">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M2.5 3.8L7.5 8l-5 4.2V3.8zM7.5 3.8L12.5 8l-5 4.2V3.8z"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-step-next-frame" class="nle-icon-btn" title="前进 1 帧 (→)" aria-label="前进一帧">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M10.5 3.8v8.4M4.5 3.8L9 8l-4.5 4.2"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-jump-clip-end" class="nle-icon-btn" title="跳至当前片段出点 (Shift+O)" aria-label="跳至出点">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M12.5 3.5v9M3.5 3.5L9.5 8l-6 4.5V3.5z"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- 右侧音量、倍速、CC -->
+        <div class="transport-group">
+          <div class="volume-control">
+            <button type="button" id="btn-monitor-dim" class="nle-dim-btn mono-num" data-active="false" aria-pressed="false" title="监听衰减 -20dB (DIM)">DIM</button>
+            <button type="button" id="btn-monitor-mute" class="nle-icon-btn mute-btn" data-muted="false" title="静音" aria-label="静音">
+              <svg class="ic-vol-on" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+                <path d="M2.5 6.2h2.4l3.1-2.6v8.8L4.9 9.8H2.5V6.2zM10.8 5.5a3.5 3.5 0 0 1 0 5M12.6 3.8a6 6 0 0 1 0 8.4"/>
+              </svg>
+              <svg class="ic-vol-off" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+                <path d="M2.5 6.2h2.4l3.1-2.6v8.8L4.9 9.8H2.5V6.2zM10.8 6l3 4M13.8 6l-3 4"/>
+              </svg>
+            </button>
+            <input type="range" id="monitor-volume-slider" class="nle-volume-slider" min="0" max="100" step="1" value="100" aria-label="监看音量">
+          </div>
+
+          <select id="sel-playback-rate" class="nle-select-xs monitor-mini-sel mono-num" title="播放倍速" aria-label="播放倍速">
+            <option value="0.75">0.75x</option>
+            <option value="1" selected>1.0x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2.0x</option>
+          </select>
+
+          <select id="sel-overlay-sub-mode" class="nle-select-xs monitor-mini-sel" title="实时画面字幕叠加" aria-label="字幕叠加">
+            <option value="bilingual" selected>CC 双语</option>
+            <option value="bilingual_rev">CC 倒序</option>
+            <option value="target">CC 译文</option>
+            <option value="source">CC 原文</option>
+            <option value="off">CC 关</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 极简 24px 音频热力导航条（Step C 升级为完整双层波形时间线） -->
+      <div id="diagnostics-bar" class="diagnostics-bar hidden" aria-label="音频热力">
+        <div id="diag-empty-view" class="diag-empty hidden">
+          <span class="muted-label">音频未体检</span>
+          <button type="button" id="btn-quick-diagnose-current" class="nle-btn-xs">体检</button>
+        </div>
+
+        <div id="diag-data-view" class="diag-data hidden">
+          <div class="diag-meta">
+            <span id="diag-grade-badge" class="grade-badge mono-num" data-grade="A">-</span>
+            <span id="diag-metrics-text" class="diag-metrics mono-num"></span>
+            <span id="diag-advice-text" class="diag-advice"></span>
+          </div>
+          <div class="diag-heat-wrap">
+            <div id="diag-heatmap-bars" class="heatmap-bars"></div>
+            <span id="diag-rec-summary" class="diag-rec-tag mono-num"></span>
+            <button type="button" id="btn-apply-rec-peaks" class="nle-btn-xs" title="套用体检推荐的高峰/全量参数">套用</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 面板 3：高光索引表 (clips · 28px 高密度专业表格) -->
+    <section id="pane-clips" class="nle-pane pane-clips">
+      <div class="pane-toolbar">
+        <div class="toolbar-cluster">
+          <span id="selected-stats-badge" class="nle-badge mono-num" title="已选 / 总高光数">0/0</span>
+          <div class="nle-seg" role="group" aria-label="排序">
+            <button type="button" class="seg-btn active" data-sort="rank" title="按评分排序">评分</button>
+            <button type="button" class="seg-btn" data-sort="time" title="按时间排序">时间</button>
+          </div>
+          <label class="nle-check compact" title="仅显示已勾选片段">
+            <input type="checkbox" id="chk-only-selected">
+            <span>仅已选</span>
+          </label>
+        </div>
+        <div class="toolbar-cluster">
+          <button type="button" id="btn-hl-select-all" class="nle-btn-xs" title="全选高光">全选</button>
+          <button type="button" id="btn-hl-unselect-all" class="nle-btn-xs" title="取消全选">清空</button>
+          <button type="button" id="btn-retranslate-highlights" class="nle-icon-btn" title="重刷全部双语字幕" aria-label="重刷全部双语字幕">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M2.5 4.5h6M5.5 3v1.5M3.5 4.5c.3 2.1 1.6 3.8 3.6 4.7M7.5 4.5c-.5 2-1.8 3.6-3.8 4.5M8.5 12.5l2.3-5.8 2.3 5.8M9.3 10.7h3"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-save-highlights" class="nle-btn-xs" title="立即保存 (Ctrl+S)">保存</button>
+        </div>
+      </div>
+      <div class="clips-filter-bar">
+        <input id="clip-search-input" class="nle-search-input" type="search" placeholder="筛选高光标题 / 备注 / 字幕..." aria-label="筛选高光">
+        <button type="button" id="btn-export-clips-csv" class="nle-btn-xs" title="导出高光编辑索引表 (.csv)">导出 CSV</button>
+      </div>
+      <div id="highlights-container" class="clip-index-wrap scroller">
+        <div class="empty-hint">无高光切片</div>
+      </div>
+    </section>
+
+    <!-- 面板 4：独立双语字幕表 (subtitles) -->
+    <section id="pane-subtitles" class="nle-pane pane-subtitles">
+      <div class="pane-toolbar">
+        <div class="toolbar-cluster min-w-0">
+          <span id="sub-pane-clip-label" class="sub-pane-clip mono-num">未选中片段</span>
+          <span id="sub-pane-count" class="nle-badge mono-num">0</span>
+        </div>
+        <div class="toolbar-cluster">
+          <button type="button" id="btn-sub-find-toggle" class="nle-icon-btn" aria-pressed="false" title="全文查找与替换字幕 (Ctrl+F)" aria-label="查找替换">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L13.6 13.6"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-sub-add-line" class="nle-icon-btn" title="插入一句字幕 (Alt+N)" aria-label="插入字幕">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M8 3.2v9.6M3.2 8h9.6"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-sub-retranslate-active" class="nle-icon-btn" title="定点重翻本段字幕" aria-label="重翻本段">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M2.5 4.5h6M5.5 3v1.5M3.5 4.5c.3 2.1 1.6 3.8 3.6 4.7M7.5 4.5c-.5 2-1.8 3.6-3.8 4.5M8.5 12.5l2.3-5.8 2.3 5.8M9.3 10.7h3"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <!-- 字幕全文查找与替换条（对标 DaVinci AutoCaption Search/Replace，支持跨全部高光批量替换+一键撤销） -->
+      <div id="sub-find-bar" class="sub-find-bar hidden" aria-label="字幕查找与替换">
+        <div class="sub-find-row">
+          <input id="sub-find-input" class="nle-search-input" type="search" placeholder="查找中文或英文..." aria-label="查找字幕">
+          <span id="sub-find-count" class="nle-badge mono-num">0/0</span>
+          <button type="button" id="btn-sub-find-prev" class="nle-icon-btn" title="上一处" aria-label="上一处">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 10l4-4 4 4"/></svg>
+          </button>
+          <button type="button" id="btn-sub-find-next" class="nle-icon-btn" title="下一处 (Enter)" aria-label="下一处">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+          <button type="button" id="btn-sub-find-close" class="nle-icon-btn" title="关闭 (Esc)" aria-label="关闭查找">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
+        </div>
+        <div class="sub-find-row">
+          <input id="sub-replace-input" class="nle-search-input" type="text" placeholder="替换为..." aria-label="替换为">
+          <button type="button" id="btn-sub-replace-one" class="nle-btn-xs" title="替换当前命中">替换</button>
+          <button type="button" id="btn-sub-replace-all" class="nle-btn-xs" title="替换本视频全部高光字幕（可 Ctrl+Z 撤销）">全部替换</button>
+        </div>
+      </div>
+      <div id="sub-pane-list" class="sub-pane-list scroller">
+        <div class="empty-hint">选中高光后在此精编双语字幕</div>
+      </div>
+    </section>
+
+    <!-- 面板 5：上下文感知检查器 (inspector · 4 标签：片段 / 粗筛 / 交付 / 词库) -->
+    <section id="pane-inspector" class="nle-pane pane-inspector">
+      <div class="subtab-bar subtab-4" role="tablist" aria-label="检查器">
+        <button type="button" class="tab-btn active" data-tab="clip" role="tab" aria-selected="true">片段</button>
+        <button type="button" class="tab-btn" data-tab="analyze" role="tab" aria-selected="false">粗筛</button>
+        <button type="button" class="tab-btn" data-tab="export" role="tab" aria-selected="false">交付</button>
+        <button type="button" class="tab-btn" data-tab="glossary" role="tab" aria-selected="false">词库</button>
+      </div>
+
+      <!-- 检查器子页 1：选中片段属性（承接高光表的完整详情、标签与 Scrubby 精准边界） -->
+      <div id="tab-panel-clip" class="inspector-body scroller">
+        <div id="clip-prop-empty" class="empty-hint">在「高光」表点选一条片段查看属性</div>
+        <div id="clip-prop-content" class="insp-sections hidden">
+          <details class="insp-group" open>
+            <summary>
+              <span>片段标识</span>
+              <span id="clip-prop-rank-badge" class="nle-badge mono-num">#1</span>
+            </summary>
+            <div class="insp-group-body">
+              <div class="insp-row">
+                <span class="insp-lbl">导出勾选</span>
+                <div class="insp-ctrl inline-flex-between">
+                  <label class="nle-check compact">
+                    <input type="checkbox" id="clip-prop-selected">
+                    <span>纳入成片</span>
+                  </label>
+                  <span id="clip-prop-score-badge" class="score-pill mono-num">0.0</span>
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="clip-prop-title-zh">中文标题</label>
+                <div class="insp-ctrl">
+                  <input id="clip-prop-title-zh" type="text" placeholder="中文爆款标题">
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="clip-prop-title-en">英文标题</label>
+                <div class="insp-ctrl">
+                  <input id="clip-prop-title-en" type="text" placeholder="English Title">
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="insp-group" open>
+            <summary>
+              <span>时间边界</span>
+              <span id="clip-prop-dur" class="nle-badge mono-num">0.0s</span>
+            </summary>
+            <div class="insp-group-body">
+              <div class="insp-row">
+                <span class="insp-lbl">入点 In</span>
+                <div id="clip-prop-start-slot" class="insp-ctrl"></div>
+              </div>
+              <div class="insp-row">
+                <span class="insp-lbl">出点 Out</span>
+                <div id="clip-prop-end-slot" class="insp-ctrl"></div>
+              </div>
+              <div class="insp-action-grid">
+                <button type="button" id="btn-clip-prop-preview" class="nle-btn-xs">预览</button>
+                <button type="button" id="btn-clip-prop-retranslate" class="nle-btn-xs">重翻</button>
+                <button type="button" id="btn-clip-prop-export" class="nle-btn-xs">单导</button>
+              </div>
+            </div>
+          </details>
+
+          <details class="insp-group" open>
+            <summary><span>备注与标签</span></summary>
+            <div class="insp-group-body">
+              <div class="nle-field">
+                <label for="clip-prop-summary">备注</label>
+                <textarea id="clip-prop-summary" rows="2" placeholder="片段备注"></textarea>
+              </div>
+              <div class="nle-field">
+                <span class="field-label">标签</span>
+                <div id="clip-prop-tags" class="tags-wrap"></div>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- 检查器子页 2：粗筛参数（左标右控 + Scrubby 热数值） -->
+      <div id="tab-panel-analyze" class="inspector-body scroller hidden">
+        <div class="insp-sections">
+          <details class="insp-group" open>
+            <summary>
+              <span>音轨与识别</span>
+              <span id="audio-stream-badge" class="nle-badge mono-num">#0</span>
+            </summary>
+            <div class="insp-group-body">
+              <div class="insp-row">
+                <label class="insp-lbl" for="sel-audio-stream">音轨</label>
+                <div class="insp-ctrl">
+                  <select id="sel-audio-stream">
+                    <option value="0" selected>默认轨 (#0)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="sel-asr-provider">ASR 引擎</label>
+                <div class="insp-ctrl">
+                  <select id="sel-asr-provider">
+                    <option value="deepseek" selected>DeepSeek ASR</option>
+                    <option value="local">本地 Whisper</option>
+                    <option value="openai_compatible">OpenAI 兼容</option>
+                  </select>
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="sel-asr-mode">识别范围</label>
+                <div class="insp-ctrl">
+                  <select id="sel-asr-mode">
+                    <option value="peaks" selected>高峰上下文</option>
+                    <option value="full">全片转写</option>
+                  </select>
+                </div>
+              </div>
+              <div class="insp-row" id="local-whisper-model-group">
+                <label class="insp-lbl" for="sel-whisper-model">Whisper</label>
+                <div class="insp-ctrl">
+                  <select id="sel-whisper-model">
+                    <option value="large-v3-turbo" selected>large-v3-turbo</option>
+                    <option value="distil-large-v3">distil-large-v3</option>
+                    <option value="medium">medium</option>
+                    <option value="small">small</option>
+                    <option value="large-v3">large-v3</option>
+                  </select>
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="input-asr-lang">源语种</label>
+                <div class="insp-ctrl">
+                  <select id="input-asr-lang" title="原视频语音识别语种">
+                    <option value="" selected>自动检测</option>
+                    <option value="en">英语 (EN)</option>
+                    <option value="zh">中文 (ZH)</option>
+                    <option value="ja">日语 (JA)</option>
+                    <option value="ko">韩语 (KO)</option>
+                    <option value="ru">俄语 (RU)</option>
+                    <option value="es">西班牙语 (ES)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="sel-target-lang">译文语种</label>
+                <div class="insp-ctrl">
+                  <select id="sel-target-lang" title="AI 双语精修的目标译文语种">
+                    <option value="auto" selected>自动匹配 (外→中 / 中→英)</option>
+                    <option value="zh">简体中文 (ZH)</option>
+                    <option value="en">英语 (EN)</option>
+                    <option value="ja">日语 (JA)</option>
+                    <option value="ko">韩语 (KO)</option>
+                    <option value="ru">俄语 (RU)</option>
+                    <option value="es">西班牙语 (ES)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="input-asr-hotwords">热词</label>
+                <div class="insp-ctrl">
+                  <input id="input-asr-hotwords" type="text" placeholder="Shylily, Where Winds Meet">
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="insp-group" open>
+            <summary><span>能量与切片</span></summary>
+            <div class="insp-group-body">
+              <div class="insp-row">
+                <label class="insp-lbl" for="num-top-k-peaks">高峰数</label>
+                <div class="insp-ctrl">
+                  <input id="num-top-k-peaks" class="mono-num scrubby-auto" type="number" min="3" max="100" value="20" title="抽取音频高能量峰值数量">
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="num-top-percent">前百分</label>
+                <div class="insp-ctrl">
+                  <input id="num-top-percent" class="mono-num scrubby-auto" data-suffix="%" type="number" min="1" max="50" step="1" value="15" title="高音量分位百分比">
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="num-hl-count">目标条数</label>
+                <div class="insp-ctrl">
+                  <input id="num-hl-count" class="mono-num scrubby-auto" type="number" min="1" max="30" placeholder="自适应" title="粗筛高光条数">
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="num-min-clip">最短时长</label>
+                <div class="insp-ctrl">
+                  <input id="num-min-clip" class="mono-num scrubby-auto" data-suffix="s" type="number" min="5" max="180" placeholder="自适应" title="最短切片秒数">
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="num-max-clip">最长时长</label>
+                <div class="insp-ctrl">
+                  <input id="num-max-clip" class="mono-num scrubby-auto" data-suffix="s" type="number" min="10" max="600" placeholder="自适应" title="最长切片秒数">
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="insp-group" open>
+            <summary><span>处理开关</span></summary>
+            <div class="insp-group-body">
+              <div class="nle-switch-grid">
+                <label class="nle-check" title="300~3400Hz 人声带通滤波">
+                  <input type="checkbox" id="chk-vocal-bandpass" checked>
+                  <span>人声带通</span>
+                </label>
+                <label class="nle-check" title="局部轻声响度归一化防漏识">
+                  <input type="checkbox" id="chk-asr-normalize" checked>
+                  <span>响度归一</span>
+                </label>
+                <label class="nle-check" title="RAG 语料纠错与双语意群精修">
+                  <input type="checkbox" id="chk-bilingual-translate" checked>
+                  <span>双语精修</span>
+                </label>
+                <label class="nle-check" title="忽略缓存从 Step 1 重跑">
+                  <input type="checkbox" id="chk-force-rerun">
+                  <span>强制重跑</span>
+                </label>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="nle-action-stack">
+          <button type="button" id="btn-analyze-current" class="nle-btn-primary">粗筛当前视频</button>
+        </div>
+      </div>
+
+      <!-- 检查器子页 3：交付导出 -->
+      <div id="tab-panel-export" class="inspector-body scroller hidden">
+        <div class="insp-sections">
+          <details class="insp-group" open>
+            <summary><span>渲染规格</span></summary>
+            <div class="insp-group-body">
+              <div class="mode-seg-grid" role="radiogroup" aria-label="导出模式">
+                <label class="mode-seg-item" title="流拷贝零损秒切 + 同步 SRT + PR/达芬奇 EDL">
+                  <input type="radio" name="export-mode" value="lossless" checked>
+                  <span>无损原画</span>
+                </label>
+                <label class="mode-seg-item" title="1080×1920 竖屏短视频 + 模糊背景 + 顶标 + 硬字幕">
+                  <input type="radio" name="export-mode" value="vertical">
+                  <span>竖屏 9:16</span>
+                </label>
+                <label class="mode-seg-item" title="原始横屏重编码并烧录双语字幕">
+                  <input type="radio" name="export-mode" value="landscape">
+                  <span>横屏 16:9</span>
+                </label>
+              </div>
+
+              <div class="insp-row">
+                <label class="insp-lbl" for="sel-subtitle-lang">字幕搭配</label>
+                <div class="insp-ctrl">
+                  <select id="sel-subtitle-lang">
+                    <option value="bilingual" selected>双语 (译文上 / 原文下)</option>
+                    <option value="bilingual_rev">双语 (原文上 / 译文下)</option>
+                    <option value="target">仅译文</option>
+                    <option value="source">仅原文</option>
+                  </select>
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="sel-encoder">编码器</label>
+                <div class="insp-ctrl">
+                  <select id="sel-encoder">
+                    <option value="auto" selected>自动 NVENC</option>
+                    <option value="nvenc">RTX NVENC</option>
+                    <option value="x264">CPU x264</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="nle-switch-grid">
+                <label class="nle-check" title="重编码时将字幕烧录进画面">
+                  <input type="checkbox" id="chk-burn-subtitles" checked>
+                  <span>硬字幕</span>
+                </label>
+                <label class="nle-check" title="竖屏顶部叠加中文标题条">
+                  <input type="checkbox" id="chk-title-banner" checked>
+                  <span>标题条</span>
+                </label>
+              </div>
+
+              <div class="insp-row">
+                <label class="insp-lbl" for="override-video-path">原片覆盖</label>
+                <div class="insp-ctrl input-action-row">
+                  <input id="override-video-path" type="text" spellcheck="false" placeholder="默认当前视频">
+                  <button type="button" id="btn-browse-override-video" class="nle-btn-xs" title="浏览 4K 原片">浏览</button>
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="nle-action-stack">
+          <button type="button" id="btn-export-selected" class="nle-btn-primary">导出已选 (0)</button>
+          <button type="button" id="btn-open-clips-dir" class="nle-btn-secondary">打开输出目录</button>
+        </div>
+
+        <div id="export-result-box" class="result-box hidden">
+          <div class="result-head">最近导出</div>
+          <div id="export-result-summary" class="result-summary mono-num"></div>
+        </div>
+      </div>
+
+      <!-- 检查器子页 4：专家语料与专属词库 -->
+      <div id="tab-panel-glossary" class="inspector-body scroller hidden">
+        <div class="corpus-status-card">
+          <div class="field-row-head">
+            <span class="field-label">多语种语料索引</span>
+            <span id="corpus-stats-badge" class="nle-badge mono-num">...</span>
+          </div>
+          <div id="corpus-stats-detail" class="corpus-detail mono-num">加载中...</div>
+          <div style="margin-top:8px;display:flex;gap:6px;">
+            <button type="button" id="btn-expand-corpus" class="nle-btn-xs" title="本地下载扩展影视/TED口语平行库至 60 万全量">扩展 60 万口语库</button>
+            <button type="button" id="btn-load-demo-inline" class="nle-btn-xs" title="载入内置 30 秒体验示例工程">载入示例工程</button>
+          </div>
+        </div>
+
+        <div class="insp-sections">
+          <details class="insp-group" open>
+            <summary><span>新增词条</span></summary>
+            <div class="insp-group-body">
+              <div class="insp-row">
+                <label class="insp-lbl" for="glossary-in-en">源语词条</label>
+                <div class="insp-ctrl">
+                  <input id="glossary-in-en" type="text" placeholder="Where Winds Meet / 台パン / 억까">
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="glossary-in-zh">目标译名</label>
+                <div class="insp-ctrl">
+                  <input id="glossary-in-zh" type="text" placeholder="《燕云十六声》/ 砸桌破防">
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="glossary-in-aliases">误听别名</label>
+                <div class="insp-ctrl">
+                  <input id="glossary-in-aliases" type="text" placeholder="warrens meat, ...">
+                </div>
+              </div>
+              <div class="insp-row">
+                <label class="insp-lbl" for="glossary-in-note">语境备注</label>
+                <div class="insp-ctrl">
+                  <input id="glossary-in-note" type="text" placeholder="可选">
+                </div>
+              </div>
+              <button type="button" id="btn-add-glossary-term" class="nle-btn-secondary">+ 添加专属词条</button>
+            </div>
+          </details>
+        </div>
+
+        <div id="user-glossary-list" class="glossary-list"></div>
+      </div>
+    </section>
+
+    <!-- 面板 6：队列与日志 (queue) -->
+    <section id="pane-queue" class="nle-pane pane-queue">
+      <div class="pane-toolbar">
+        <span class="muted-label">任务队列</span>
+        <span id="task-progress-label" class="nle-badge mono-num">0%</span>
+      </div>
+      <div class="progress-track">
+        <div id="task-progress-fill" class="progress-fill" style="width: 0%;"></div>
+      </div>
+      <pre id="task-log-output" class="task-log-pre scroller mono-num">就绪</pre>
+    </section>
+
+    <!-- 面板 7：操作历史记录 (history · 对标 PR History / DaVinci Undo History) -->
+    <section id="pane-history" class="nle-pane pane-history">
+      <div class="pane-toolbar">
+        <div class="toolbar-cluster">
+          <span class="muted-label">版本记录</span>
+          <span id="history-step-badge" class="nle-badge mono-num">0/0</span>
+        </div>
+        <div class="toolbar-cluster">
+          <button type="button" id="btn-hist-undo" class="nle-icon-btn" disabled title="撤销上一步 (Ctrl+Z)" aria-label="撤销">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M5.5 4.2L2.5 7l3 2.8M2.8 7h6.4a3.5 3.5 0 1 1 0 7H7"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-hist-redo" class="nle-icon-btn" disabled title="重做下一步 (Ctrl+Shift+Z)" aria-label="重做">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M10.5 4.2l3 2.8-3 2.8M13.2 7H6.8a3.5 3.5 0 1 0 0 7H9"/>
+            </svg>
+          </button>
+          <button type="button" id="btn-hist-revert" class="nle-btn-xs" disabled title="退回到本次打开时的初始版本">回初始</button>
+        </div>
+      </div>
+      <div id="history-list" class="history-list scroller" role="list">
+        <div class="empty-hint">暂无操作记录</div>
+      </div>
+    </section>
+
+    <!-- 面板 8：双层多轨 Canvas 时间线 (timeline · 对标 DaVinci Cut/Edit Page) -->
+    <section id="pane-timeline" class="nle-pane pane-timeline">
+      <div class="pane-toolbar timeline-toolbar">
+        <div class="toolbar-cluster">
+          <div class="nle-seg" role="group" aria-label="时间线工具">
+            <button type="button" id="btn-tl-tool-select" class="seg-btn icon-only active" data-tl-tool="select" title="选择 / 拖边修剪工具 (V)" aria-label="选择工具">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+                <path d="M3.5 2.2l8.5 5.4-3.7 1.1-1.9 3.6-2.9-10.1z"/>
+              </svg>
+            </button>
+            <button type="button" id="btn-tl-tool-razor" class="seg-btn icon-only" data-tl-tool="razor" title="剃刀拆字幕工具 (B)" aria-label="剃刀工具">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+                <path d="M3 12.5l9.5-9M5.5 3.5l5 5M11 9.5l2 2"/>
+              </svg>
+            </button>
+          </div>
+
+          <span class="mini-sep" aria-hidden="true"></span>
+
+          <label class="icon-toggle-btn" title="磁吸吸附开关 (N)">
+            <input type="checkbox" id="chk-tl-snap" checked>
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M4.2 3v5.2a3.8 3.8 0 0 0 7.6 0V3M3.2 5.2h2.2M10.6 5.2h2.2"/>
+            </svg>
+          </label>
+
+          <button type="button" id="btn-tl-split-playhead" class="nle-icon-btn" title="在播放头位置拆分字幕 / 切片 (C / Ctrl+\)" aria-label="播放头拆分">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M8 2v12M3 5h3.5v6H3M13 5H9.5v6H13"/>
+            </svg>
+          </button>
+
+          <button type="button" id="btn-tl-view-opts" class="nle-icon-btn" popovertarget="tl-view-options-popover" title="时间线视图选项 (Timeline View Options)" aria-label="时间线视图选项">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <rect x="2" y="2.5" width="12" height="3" rx="0.5"/>
+              <rect x="2" y="6.8" width="12" height="3.2" rx="0.5"/>
+              <rect x="2" y="11.2" width="12" height="2.3" rx="0.5"/>
+            </svg>
+          </button>
+
+          <button type="button" id="btn-tl-fit-clip" class="nle-btn-xs" title="缩放聚焦当前选中高光">聚焦本段</button>
+          <button type="button" id="btn-tl-fit-all" class="nle-btn-xs" title="适配全片视野 (Shift+Z)">适配全片</button>
+        </div>
+
+        <div class="toolbar-cluster">
+          <span id="tl-view-span" class="nle-badge mono-num" title="当前时间线视口跨度">全片</span>
+          <button type="button" id="btn-tl-zoom-out" class="nle-icon-btn" title="缩小时间线 (-)" aria-label="缩小时间线">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M3.5 8h9"/>
+            </svg>
+          </button>
+          <input type="range" id="tl-zoom-slider" class="nle-volume-slider tl-zoom-slider" min="0" max="100" step="1" value="0" aria-label="时间线缩放">
+          <button type="button" id="btn-tl-zoom-in" class="nle-icon-btn" title="放大时间线 (=)" aria-label="放大时间线">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M8 3.5v9M3.5 8h9"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 上层 24px 全片总览导航条（DaVinci Cut Page） -->
+      <div class="tl-overview-row">
+        <div class="tl-overview-corner mono-num">ALL</div>
+        <div class="tl-overview-canvas-wrap">
+          <canvas id="tl-overview-canvas" class="tl-canvas" title="全片总览：点击空降、拖动滑框平移、拖拉两端缩放视野"></canvas>
+        </div>
+      </div>
+
+      <!-- 下层：左 84px 固定轨道头（V1 / A1 / T1）+ 右自适应多轨 Canvas -->
+      <div class="tl-body">
+        <aside class="tl-headers" aria-label="轨道控制头">
+          <div class="tl-header-ruler mono-num">
+            <span id="tl-fps-badge">30fps</span>
+          </div>
+
+          <div class="tl-track-head tl-head-v1">
+            <span class="tl-track-tag tag-v1 mono-num">V1</span>
+            <div class="tl-head-ctrls">
+              <label class="tl-head-toggle" title="锁定 V1 防误改出入点">
+                <input type="checkbox" id="chk-tl-v1-lock">
+                <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                  <rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>
+                </svg>
+              </label>
+              <label class="tl-head-toggle" title="显示 / 隐藏 V1 高光轨">
+                <input type="checkbox" id="chk-tl-v1-vis" checked>
+                <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                  <path d="M1.8 8s2.4-4 6.2-4 6.2 4 6.2 4-2.4 4-6.2 4-6.2-4-6.2-4z"/><circle cx="8" cy="8" r="1.7"/>
+                </svg>
+              </label>
+            </div>
+          </div>
+
+          <div class="tl-track-head tl-head-a1">
+            <span class="tl-track-tag tag-a1 mono-num">A1</span>
+            <div class="tl-head-ctrls">
+              <button type="button" id="btn-tl-a1-mute" class="tl-head-btn mono-num" data-active="false" title="静音 A1 监听音频">M</button>
+              <span id="tl-a1-stream-tag" class="tl-stream-mini mono-num">#0</span>
+            </div>
+          </div>
+
+          <div class="tl-track-head tl-head-t1">
+            <span class="tl-track-tag tag-t1 mono-num">T1</span>
+            <div class="tl-head-ctrls">
+              <label class="tl-head-toggle" title="锁定 T1 字幕轨">
+                <input type="checkbox" id="chk-tl-t1-lock">
+                <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                  <rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>
+                </svg>
+              </label>
+              <label class="tl-head-toggle" title="显示 / 隐藏 T1 字幕轨与画面叠字">
+                <input type="checkbox" id="chk-tl-t1-vis" checked>
+                <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                  <path d="M1.8 8s2.4-4 6.2-4 6.2 4 6.2 4-2.4 4-6.2 4-6.2-4-6.2-4z"/><circle cx="8" cy="8" r="1.7"/>
+                </svg>
+              </label>
+            </div>
+          </div>
+        </aside>
+
+        <div class="tl-tracks-wrap">
+          <canvas id="tl-tracks-canvas" class="tl-canvas" title="时间线：滚轮平移 · Alt+滚轮缩放 · 边缘拖动 Trim · 中键抓手"></canvas>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- 接口与外观设置弹窗 -->
+  <dialog id="settings-dialog" closedby="any" aria-labelledby="settings-dialog-title">
+    <form method="dialog" id="settings-form" class="dialog-inner">
+      <div class="dialog-header">
+        <h2 id="settings-dialog-title">接口与外观</h2>
+        <button type="submit" value="cancel" class="nle-icon-btn" aria-label="关闭">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+            <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="dialog-body scroller">
+        <div class="nle-field">
+          <span class="field-label">主题</span>
+          <div class="theme-tri-state" role="radiogroup" aria-label="界面主题">
+            <label class="theme-opt">
+              <input type="radio" name="theme-mode" value="dark" checked>
+              <span>暗房</span>
+            </label>
+            <label class="theme-opt">
+              <input type="radio" name="theme-mode" value="system">
+              <span id="theme-system-label">跟随系统</span>
+            </label>
+            <label class="theme-opt">
+              <input type="radio" name="theme-mode" value="light">
+              <span>日间</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="nle-field">
+          <div class="field-row-head">
+            <label for="cfg-api-key">API Key</label>
+            <span id="cfg-key-status" class="nle-badge mono-num">未配置</span>
+          </div>
+          <input id="cfg-api-key" type="password" placeholder="留空保持不变">
+        </div>
+
+        <div class="nle-grid-2">
+          <div class="nle-field">
+            <label for="cfg-base-url">Base URL</label>
+            <input id="cfg-base-url" type="url" placeholder="https://api.deepseek.com/v1">
+          </div>
+          <div class="nle-field">
+            <label for="cfg-llm-model">粗筛模型</label>
+            <input id="cfg-llm-model" type="text" placeholder="deepseek-flash">
+          </div>
+        </div>
+
+        <div class="nle-field">
+          <label for="cfg-asr-provider">默认 ASR</label>
+          <select id="cfg-asr-provider">
+            <option value="deepseek" selected>DeepSeek ASR</option>
+            <option value="local">本地 Whisper</option>
+            <option value="openai_compatible">OpenAI 兼容</option>
+          </select>
+        </div>
+
+        <details class="insp-group" id="cfg-advanced-drawer">
+          <summary><span>三层独立路由与思考强度</span></summary>
+          <div class="insp-group-body">
+            <div class="nle-field">
+              <label for="cfg-asr-base-url">ASR URL</label>
+              <input id="cfg-asr-base-url" type="url" placeholder="https://api.deepseek.com/v1/tools/asr">
+            </div>
+            <div class="nle-grid-2">
+              <div class="nle-field">
+                <label for="cfg-asr-model">ASR 模型</label>
+                <input id="cfg-asr-model" type="text" placeholder="自动">
+              </div>
+              <div class="nle-field">
+                <div class="field-row-head">
+                  <label for="cfg-asr-api-key">ASR Key</label>
+                  <span id="cfg-asr-key-status" class="nle-badge">复用主Key</span>
+                </div>
+                <input id="cfg-asr-api-key" type="password" placeholder="留空复用">
+              </div>
+            </div>
+            <div class="nle-field">
+              <label for="cfg-asr-hotwords">全局热词</label>
+              <input id="cfg-asr-hotwords" type="text" placeholder="Shylily, Where Winds Meet, KEKW">
+            </div>
+
+            <div class="nle-grid-2">
+              <div class="nle-field">
+                <label for="cfg-polish-model">精修模型</label>
+                <input id="cfg-polish-model" type="text" placeholder="同粗筛模型">
+              </div>
+              <div class="nle-field">
+                <div class="field-row-head">
+                  <label for="cfg-polish-api-key">精修 Key</label>
+                  <span id="cfg-polish-key-status" class="nle-badge">复用主Key</span>
+                </div>
+                <input id="cfg-polish-api-key" type="password" placeholder="留空复用">
+              </div>
+            </div>
+            <div class="nle-field">
+              <label for="cfg-polish-base-url">精修 URL</label>
+              <input id="cfg-polish-base-url" type="url" placeholder="同主接口">
+            </div>
+
+            <div class="nle-grid-2">
+              <div class="nle-field">
+                <label for="cfg-screen-effort">粗筛思考</label>
+                <select id="cfg-screen-effort">
+                  <option value="">关闭</option>
+                  <option value="low">low</option>
+                  <option value="high">high</option>
+                  <option value="max">max</option>
+                </select>
+              </div>
+              <div class="nle-field">
+                <label for="cfg-polish-effort">精修思考</label>
+                <select id="cfg-polish-effort">
+                  <option value="">自动 (low)</option>
+                  <option value="none">关闭</option>
+                  <option value="low">low</option>
+                  <option value="high">high</option>
+                  <option value="max">max</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div class="dialog-footer">
+        <button type="submit" value="cancel" class="nle-btn-sm" autofocus>取消</button>
+        <button type="button" id="btn-save-settings" class="nle-btn-sm primary-subtle">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 双语字幕重刷弹窗 -->
+  <dialog id="retranslate-dialog" closedby="any" aria-labelledby="retranslate-dialog-title">
+    <form method="dialog" id="retranslate-form" class="dialog-inner">
+      <div class="dialog-header">
+        <h2 id="retranslate-dialog-title">重刷双语字幕</h2>
+        <button type="submit" value="cancel" class="nle-icon-btn" aria-label="关闭">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+            <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body scroller">
+        <p id="retranslate-target-desc" class="dialog-desc"></p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+          <div class="nle-field">
+            <label for="retranslate-src-lang">源语种</label>
+            <select id="retranslate-src-lang">
+              <option value="">跟随原片 / 自动</option>
+              <option value="en">英语 (EN)</option>
+              <option value="zh">中文 (ZH)</option>
+              <option value="ja">日语 (JA)</option>
+              <option value="ko">韩语 (KO)</option>
+              <option value="ru">俄语 (RU)</option>
+              <option value="es">西班牙语 (ES)</option>
+            </select>
+          </div>
+          <div class="nle-field">
+            <label for="retranslate-tgt-lang">译文语种</label>
+            <select id="retranslate-tgt-lang">
+              <option value="auto">自动匹配</option>
+              <option value="zh">简体中文 (ZH)</option>
+              <option value="en">英语 (EN)</option>
+              <option value="ja">日语 (JA)</option>
+              <option value="ko">韩语 (KO)</option>
+              <option value="ru">俄语 (RU)</option>
+              <option value="es">西班牙语 (ES)</option>
+            </select>
+          </div>
+        </div>
+        <div class="nle-field">
+          <label for="retranslate-hotwords">术语热词</label>
+          <input id="retranslate-hotwords" type="text" placeholder="Shylily, Where Winds Meet（燕云十六声）, KEKW">
+        </div>
+        <div class="nle-field">
+          <label for="retranslate-context">背景语境</label>
+          <textarea id="retranslate-context" rows="3" placeholder="可选：补充人物、游戏名与语气背景"></textarea>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button type="submit" value="cancel" class="nle-btn-sm">取消</button>
+        <button type="button" id="btn-confirm-retranslate" class="nle-btn-sm primary-subtle">开始重刷</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 专业 NLE 快捷键速查弹窗（对标 Premiere Pro / DaVinci Resolve） -->
+  <dialog id="shortcuts-dialog" class="shortcuts-dialog" closedby="any" aria-labelledby="shortcuts-dialog-title">
+    <form method="dialog" class="dialog-inner shortcuts-inner">
+      <div class="dialog-header">
+        <h2 id="shortcuts-dialog-title">快捷键</h2>
+        <button type="submit" value="cancel" class="nle-icon-btn" aria-label="关闭">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+            <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body scroller">
+        <div class="shortcut-sections">
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">播控与梭巡</div>
+            <div class="shortcut-row"><kbd>Space</kbd><span>播放 / 暂停</span></div>
+            <div class="shortcut-row"><kbd>L</kbd><span>正向加速梭巡 (1x→8x)</span></div>
+            <div class="shortcut-row"><kbd>K</kbd><span>急停（配 J/L 慢放）</span></div>
+            <div class="shortcut-row"><kbd>J</kbd><span>反向加速梭巡 (-1x→-8x)</span></div>
+            <div class="shortcut-row"><kbd>←</kbd> / <kbd>→</kbd><span>逐帧后退 / 前进</span></div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>←/→</kbd><span>步进 ±1 秒（或 , / .）</span></div>
+            <div class="shortcut-row"><kbd>Home</kbd> / <kbd>End</kbd><span>跳至片头 / 片尾</span></div>
+          </div>
+
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">入出点与片段</div>
+            <div class="shortcut-row"><kbd>I</kbd> / <kbd>O</kbd><span>设当前段入点 / 出点</span></div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>I/O</kbd><span>跳至当前段入点 / 出点</span></div>
+            <div class="shortcut-row"><kbd>/</kbd><span>从入点重播当前片段</span></div>
+            <div class="shortcut-row"><kbd>↑</kbd> / <kbd>↓</kbd><span>选中上一条 / 下一条高光</span></div>
+            <div class="shortcut-row"><kbd>Enter</kbd><span>播放预览当前选中高光</span></div>
+            <div class="shortcut-row"><kbd>S</kbd><span>勾选 / 取消导出当前段</span></div>
+            <div class="shortcut-row"><kbd>M</kbd><span>开关当前段循环播放</span></div>
+          </div>
+
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">时间线与字幕</div>
+            <div class="shortcut-row"><kbd>V</kbd> / <kbd>B</kbd><span>选择 Trim / 剃刀工具</span></div>
+            <div class="shortcut-row"><kbd>N</kbd><span>开关时间线磁吸吸附</span></div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>Z</kbd><span>时间线适配全片</span></div>
+            <div class="shortcut-row"><kbd>=</kbd> / <kbd>-</kbd><span>时间线放大 / 缩小</span></div>
+            <div class="shortcut-row"><kbd>C</kbd><span>在播放头位置拆分字幕</span></div>
+            <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>N</kbd><span>在播放头插入新字幕</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Z</kbd><span>撤销上一步操作</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd><span>重做（或 Ctrl+Y）</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>H</kbd><span>打开操作历史记录面板</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>S</kbd><span>立即保存审片与字幕</span></div>
+          </div>
+
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">工作区与窗口</div>
+            <div class="shortcut-row"><kbd>`</kbd><span>悬停面板最大化 / 还原</span></div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>1~4</kbd><span>切 剪辑/审片/字幕/交付</span></div>
+            <div class="shortcut-row"><kbd>F11</kbd><span>无边框全屏</span></div>
+            <div class="shortcut-row"><kbd>?</kbd><span>打开快捷键速查</span></div>
+            <div class="shortcut-row"><kbd>Esc</kbd><span>退出最大化 / 关弹窗</span></div>
+          </div>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 首次启动快速填 Key / 体验示例工程引导模态框 -->
+  <dialog id="onboarding-dialog" closedby="any" aria-labelledby="onboarding-dialog-title">
+    <form method="dialog" id="onboarding-form" class="dialog-inner" style="width:460px;max-width:92vw;">
+      <div class="dialog-header">
+        <h2 id="onboarding-dialog-title">Solacut 快速启动</h2>
+        <button type="submit" value="cancel" class="nle-icon-btn" aria-label="关闭">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+            <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body scroller">
+        <div class="nle-field">
+          <label for="onboarding-provider-preset">接口预设</label>
+          <select id="onboarding-provider-preset">
+            <option value="deepseek" selected>DeepSeek（单 Key 全家桶 · ASR + 粗筛 + 精修）</option>
+            <option value="openai">OpenAI / 兼容接口</option>
+          </select>
+        </div>
+        <div class="nle-field">
+          <label for="onboarding-base-url">Base URL</label>
+          <input id="onboarding-base-url" type="text" value="https://api.deepseek.com" spellcheck="false">
+        </div>
+        <div class="nle-field">
+          <label for="onboarding-api-key">API Key（仅存本机 .env，不上传任何服务器）</label>
+          <input id="onboarding-api-key" type="password" placeholder="sk-..." autocomplete="off">
+        </div>
+      </div>
+      <div class="dialog-footer" style="justify-content:space-between;">
+        <button type="button" id="btn-onboarding-demo" class="nle-btn-sm">体验 30 秒示例</button>
+        <div style="display:flex;gap:6px;">
+          <button type="submit" value="cancel" id="btn-onboarding-skip" class="nle-btn-sm">稍后再说</button>
+          <button type="button" id="btn-onboarding-save" class="nle-btn-sm primary-subtle">保存并开始</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <script src="/static/app.js?v=v09beta1" type="module"></script>
+</body>
+</html>
