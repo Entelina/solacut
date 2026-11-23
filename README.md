@@ -1,6 +1,6 @@
 # Solacut — 本地 NLE 游戏录屏高光切片与六语种母语精翻工作台
 
-> 📖 **新手必看**：完整图文与快捷键教程见 [**《Solacut 操作手册 (USER_MANUAL.md)》**](./USER_MANUAL.md)（软件内也可按 `F1` 随时打开）｜安全架构说明见 [`SECURITY.md`](./SECURITY.md)｜第三方组件与语料署名见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
+> 🌐 **官方网站**：[**https://solacut.com**](https://solacut.com)（便携包下载与 SHA-256 核验）｜📖 **新手必看**：[**《Solacut 操作手册 (USER_MANUAL.md)》**](./USER_MANUAL.md)（软件内按 `F1` 随时打开）｜🔒 [`SECURITY.md`](./SECURITY.md)｜📄 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)
 
 一个纯本地起手的专业桌面级游戏录屏高光自动切片与类达芬奇审片工作台，将数小时直播通过「OBS 多音轨人声带通探测 + 多引擎语音识别 + 6 语种 22.8 万商用语料（可扩展至 60 万研究口语库）RAG 与三道零漏翻闭环 + 原生桌面 NLE 审片工作台（含媒体池虚拟文件夹分类）+ FFmpeg 无损/竖屏双语渲染」变成可交付的短视频成片与剪辑工程。
 
