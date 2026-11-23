@@ -243,7 +243,7 @@ def probe_audio_streams(video_path: str | Path) -> list[dict[str, Any]]:
         "stream=index,codec_name,channels,channel_layout,sample_rate:stream_tags=title,language,handler_name",
         "-of",
         "json",
-        str(src_video),
+        str(src_video.resolve()),
     ]
     proc = run_media_subprocess(cmd, timeout=30)
     if proc.returncode != 0:
@@ -374,7 +374,7 @@ def extract_audio_to_wav(
         ffmpeg_bin,
         "-y",
         "-i",
-        str(src_video),
+        str(src_video.resolve()),
         "-map",
         f"0:a:{int(audio_stream)}",
         "-vn",
@@ -919,8 +919,11 @@ def analyze_video_audio(
         rms_threshold=threshold,
     )
 
+    src_stat = src_video.stat()
     result: dict[str, Any] = {
         "video_path": str(src_video.resolve()),
+        "video_size": int(src_stat.st_size),
+        "video_mtime_ns": int(src_stat.st_mtime_ns),
         "wav_path": str(wav_path.resolve()),
         "json_path": str(json_path.resolve()),
         "sample_rate": sample_rate,
@@ -979,7 +982,7 @@ def probe_media_info(video_path: str | Path) -> dict[str, Any]:
         "-show_streams",
         "-of",
         "json",
-        str(src_video),
+        str(src_video.resolve()),
     ]
     proc = run_media_subprocess(cmd, timeout=30)
     if proc.returncode != 0:
@@ -1156,7 +1159,7 @@ def extract_video_thumbnail(
             "-ss",
             f"{seek_sec:.2f}",
             "-i",
-            str(src_video),
+            str(src_video.resolve()),
             "-frames:v",
             "1",
             "-update",

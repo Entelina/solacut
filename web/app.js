@@ -36,6 +36,11 @@ const state = {
   })(),
   mediaStageFilter: "all",
   mediaSortBy: "name",
+  mediaBins: { folders: [], assignments: {}, tags: {} },
+  activeBinScope: "all", // 'all' | 'unfiled' | <folderId>
+  editingBinId: null,
+  selectedBinColor: "#4f8ef7",
+  draggingVideoPaths: [],
   mediaInfoCache: new Map(),
   previewSegment: null, // { rank, start_sec, end_sec }
   activeClipRank: null, // 当前在检查器「片段」页与「字幕」面板选中的高光 rank
@@ -647,42 +652,49 @@ async function loadCorpusStatus() {
 }
 
 const SUB_LANG_META = {
-  zh: { short: "中", name: "简体中文", code: "ZH" },
-  en: { short: "英", name: "英语", code: "EN" },
-  ja: { short: "日", name: "日语", code: "JA" },
-  ko: { short: "韩", name: "韩语", code: "KO" },
-  ru: { short: "俄", name: "俄语", code: "RU" },
-  es: { short: "西", name: "西语", code: "ES" },
+  zh: { short: "中", name: "简体中文", code: "ZH", cjk: true },
+  en: { short: "英", name: "英语", code: "EN", cjk: false },
+  ja: { short: "日", name: "日语", code: "JA", cjk: true },
+  ko: { short: "韩", name: "韩语", code: "KO", cjk: true },
+  ru: { short: "俄", name: "俄语", code: "RU", cjk: false },
+  es: { short: "西", name: "西语", code: "ES", cjk: false },
 };
 
-function getActiveLanguagePair() {
+function getActiveLanguagePair(overrideTargetLang = null) {
   const srcRaw = (
     state.highlightsData?.source_language ||
-    state.selectedVideo?.source_language ||
+    state.activeVideo?.source_language ||
     el("input-asr-lang")?.value ||
     "en"
   )
     .trim()
     .toLowerCase();
   const src = SUB_LANG_META[srcRaw] ? srcRaw : "en";
-  let tgtRaw = (
+
+  let actualTgtRaw = (
     state.highlightsData?.target_language ||
-    state.selectedVideo?.target_language ||
+    state.activeVideo?.target_language ||
     el("sel-target-lang")?.value ||
     "auto"
   )
     .trim()
     .toLowerCase();
-  if (!tgtRaw || tgtRaw === "auto" || !SUB_LANG_META[tgtRaw]) {
-    tgtRaw = src === "zh" ? "en" : "zh";
+  if (!actualTgtRaw || actualTgtRaw === "auto" || !SUB_LANG_META[actualTgtRaw]) {
+    actualTgtRaw = src === "zh" ? "en" : "zh";
   }
-  const tgt = tgtRaw === src ? (src === "zh" ? "en" : "zh") : tgtRaw;
+  const actualTgt = actualTgtRaw === src ? (src === "zh" ? "en" : "zh") : actualTgtRaw;
+
+  const pickRaw = (overrideTargetLang || "").trim().toLowerCase();
+  const tgt = pickRaw && SUB_LANG_META[pickRaw] ? pickRaw : actualTgt;
+
   return {
     src,
     tgt,
+    actualTgt,
     srcMeta: SUB_LANG_META[src] || SUB_LANG_META.en,
     tgtMeta: SUB_LANG_META[tgt] || SUB_LANG_META.zh,
-    isZhToEn: src === "zh" && tgt === "en",
+    actualTgtMeta: SUB_LANG_META[actualTgt] || SUB_LANG_META.zh,
+    isZhToEn: src === "zh" && actualTgt === "en",
   };
 }
 
@@ -704,15 +716,53 @@ function resolveSubPairTexts(sub, lp = getActiveLanguagePair()) {
   return { tgtText: zh || en || orig, srcText: en || orig || zh };
 }
 
-function syncLanguagePairUI() {
-  const lp = getActiveLanguagePair();
-  const pairLabel = `${lp.srcMeta.short}${lp.tgtMeta.short}`;
+function writeSubPairTexts(sub, tgtText, srcText, lp = getActiveLanguagePair()) {
+  if (!sub) return;
+  const cleanTgt = String(tgtText ?? "").trim();
+  const cleanSrc = String(srcText ?? "").trim();
+  sub.text_tgt = cleanTgt;
+  sub.text_src = cleanSrc;
+  if (lp.isZhToEn) {
+    sub.text_en = cleanTgt;
+    sub.text_zh = cleanSrc;
+  } else {
+    sub.text_zh = cleanTgt;
+    sub.text_en = cleanSrc;
+  }
+}
+
+function splitTextByRatio(text, ratio, isCjk = false) {
+  const clean = String(text || "").trim();
+  if (!clean) return ["", ""];
+  if (isCjk || !/\s/.test(clean)) {
+    if (clean.length <= 1) return [clean, ""];
+    const mid = Math.max(1, Math.min(clean.length - 1, Math.round(clean.length * ratio)));
+    return [clean.slice(0, mid).trim(), clean.slice(mid).trim()];
+  }
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return [clean, ""];
+  const mid = Math.max(1, Math.min(words.length - 1, Math.round(words.length * ratio)));
+  return [words.slice(0, mid).join(" ").trim(), words.slice(mid).join(" ").trim()];
+}
+
+function syncLanguagePairUI(syncExportSelectFromData = false) {
+  const exportTgtSel = el("sel-export-target-lang");
+  const baseLp = getActiveLanguagePair();
+  if (exportTgtSel && syncExportSelectFromData && SUB_LANG_META[baseLp.actualTgt]) {
+    exportTgtSel.value = baseLp.actualTgt;
+  }
+
+  const desiredTgt = exportTgtSel?.value || baseLp.actualTgt;
+  const lp = getActiveLanguagePair(desiredTgt);
+  const actualPairLabel = `${lp.srcMeta.short}${lp.actualTgtMeta.short}`;
+  const desiredPairLabel = `${lp.srcMeta.short}${lp.tgtMeta.short}`;
+  const hasMismatch = Boolean(state.highlightsData && lp.tgt !== lp.actualTgt);
 
   const exportSel = el("sel-subtitle-lang");
   if (exportSel) {
     const mapText = {
-      bilingual: `${pairLabel}双语 (${lp.tgtMeta.short}上 / ${lp.srcMeta.short}下)`,
-      bilingual_rev: `${pairLabel}双语 (${lp.srcMeta.short}上 / ${lp.tgtMeta.short}下)`,
+      bilingual: `${desiredPairLabel}双语 (${lp.tgtMeta.short}上 / ${lp.srcMeta.short}下)`,
+      bilingual_rev: `${desiredPairLabel}双语 (${lp.srcMeta.short}上 / ${lp.tgtMeta.short}下)`,
       target: `仅${lp.tgtMeta.name} (${lp.tgtMeta.code})`,
       source: `仅${lp.srcMeta.name} (${lp.srcMeta.code})`,
     };
@@ -721,12 +771,38 @@ function syncLanguagePairUI() {
     });
   }
 
+  const hintEl = el("export-lang-pair-hint");
+  const switchBtn = el("btn-export-switch-lang");
+  if (hintEl) {
+    if (!state.highlightsData) {
+      hintEl.textContent = "支持中 / 英 / 日 / 韩 / 俄 / 西 6 语种自由组合双语或单语导出";
+      hintEl.classList.remove("is-mismatch");
+    } else if (hasMismatch) {
+      hintEl.textContent = `当前字幕为 ${lp.srcMeta.name}→${lp.actualTgtMeta.name}；点「切换重翻」即可生成 ${lp.tgtMeta.name} (${lp.tgtMeta.code}) 母语字幕`;
+      hintEl.classList.add("is-mismatch");
+    } else {
+      hintEl.textContent = `当前已就绪：${lp.srcMeta.name} (${lp.srcMeta.code}) → ${lp.actualTgtMeta.name} (${lp.actualTgtMeta.code}) · 可随时切其他 5 语种`;
+      hintEl.classList.remove("is-mismatch");
+    }
+  }
+  if (switchBtn) {
+    switchBtn.classList.toggle("primary-subtle", hasMismatch);
+    switchBtn.disabled = !state.highlightsData;
+    switchBtn.textContent = hasMismatch ? `重翻为${lp.tgtMeta.short}` : "切换重翻";
+  }
+
+  const subPill = el("sub-pane-lang-pill");
+  if (subPill) {
+    subPill.textContent = `${lp.srcMeta.code} → ${lp.actualTgtMeta.code}`;
+    subPill.title = `当前字幕：${lp.srcMeta.name} → ${lp.actualTgtMeta.name}（点击切换 6 语种重翻）`;
+  }
+
   const overlaySel = el("sel-overlay-sub-mode");
   if (overlaySel) {
     const mapOverlay = {
-      bilingual: `CC ${pairLabel}双语`,
-      bilingual_rev: `CC ${lp.srcMeta.short}/${lp.tgtMeta.short}`,
-      target: `CC ${lp.tgtMeta.name}`,
+      bilingual: `CC ${actualPairLabel}双语`,
+      bilingual_rev: `CC ${lp.srcMeta.short}/${lp.actualTgtMeta.short}`,
+      target: `CC ${lp.actualTgtMeta.name}`,
       source: `CC ${lp.srcMeta.name}`,
       off: "CC 关",
     };
@@ -736,9 +812,283 @@ function syncLanguagePairUI() {
   }
 }
 
+/* ==================== 媒体池虚拟文件夹（Bin）与 5 色标签 ==================== */
+const MEDIA_BINS_LS_KEY = "solacut_media_bins_v1";
+const MEDIA_TAG_META = {
+  red: { label: "爆款红", order: 0 },
+  orange: { label: "待剪橙", order: 1 },
+  green: { label: "已审绿", order: 2 },
+  blue: { label: "精品蓝", order: 3 },
+  purple: { label: "存档紫", order: 4 },
+};
+
+async function loadMediaBins() {
+  try {
+    const data = await apiFetch("/api/media-bins");
+    state.mediaBins = {
+      folders: Array.isArray(data?.folders) ? data.folders : [],
+      assignments: data?.assignments && typeof data.assignments === "object" ? data.assignments : {},
+      tags: data?.tags && typeof data.tags === "object" ? data.tags : {},
+    };
+    try {
+      localStorage.setItem(MEDIA_BINS_LS_KEY, JSON.stringify(state.mediaBins));
+    } catch {}
+    return;
+  } catch {
+    try {
+      const cached = JSON.parse(localStorage.getItem(MEDIA_BINS_LS_KEY) || "null");
+      if (cached && Array.isArray(cached.folders)) {
+        state.mediaBins = {
+          folders: cached.folders,
+          assignments: cached.assignments || {},
+          tags: cached.tags || {},
+        };
+      }
+    } catch {}
+  }
+}
+
+async function persistMediaBins() {
+  try {
+    localStorage.setItem(MEDIA_BINS_LS_KEY, JSON.stringify(state.mediaBins));
+  } catch {}
+  try {
+    const res = await apiFetch("/api/media-bins", {
+      method: "PUT",
+      body: JSON.stringify(state.mediaBins),
+    });
+    if (res && Array.isArray(res.folders)) {
+      state.mediaBins = {
+        folders: res.folders,
+        assignments: res.assignments || {},
+        tags: res.tags || {},
+      };
+    }
+  } catch (err) {
+    showToast(`保存文件夹分类失败：${err.message}`, true);
+  }
+}
+
+function getBinFolderById(folderId) {
+  return (state.mediaBins.folders || []).find((f) => f.id === folderId) || null;
+}
+
+function openMediaBinDialog(editFolder = null) {
+  const dlg = el("media-bin-dialog");
+  const titleEl = el("media-bin-dialog-title");
+  const inputEl = el("media-bin-name-input");
+  if (!dlg || !inputEl) return;
+
+  state.editingBinId = editFolder ? editFolder.id : null;
+  state.selectedBinColor = editFolder?.color || "#4f8ef7";
+  if (titleEl) titleEl.textContent = editFolder ? "编辑文件夹" : "新建文件夹";
+  inputEl.value = editFolder?.name || "";
+
+  document.querySelectorAll("#media-bin-color-picker .bin-color-dot").forEach((dot) => {
+    dot.classList.toggle("active", dot.dataset.binColor === state.selectedBinColor);
+  });
+
+  if (!dlg.open && typeof dlg.showModal === "function") dlg.showModal();
+  setTimeout(() => {
+    inputEl.focus();
+    inputEl.select();
+  }, 20);
+}
+
+async function saveMediaBinFromDialog() {
+  const inputEl = el("media-bin-name-input");
+  const name = (inputEl?.value || "").trim();
+  if (!name) {
+    showToast("请输入文件夹名称", true);
+    inputEl?.focus();
+    return;
+  }
+
+  const folders = state.mediaBins.folders || [];
+  if (state.editingBinId) {
+    const target = folders.find((f) => f.id === state.editingBinId);
+    if (target) {
+      target.name = name;
+      target.color = state.selectedBinColor || "#4f8ef7";
+    }
+    setStatusMessage(`已更新文件夹：${name}`);
+  } else {
+    const newId = `bin_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    folders.push({
+      id: newId,
+      name,
+      color: state.selectedBinColor || "#4f8ef7",
+      created_at: Date.now() / 1000,
+    });
+    state.mediaBins.folders = folders;
+    setStatusMessage(`已新建文件夹：${name}`);
+  }
+
+  el("media-bin-dialog")?.close();
+  renderVideoList();
+  await persistMediaBins();
+}
+
+async function deleteMediaBin(folderId) {
+  const target = getBinFolderById(folderId);
+  if (!target) return;
+  state.mediaBins.folders = (state.mediaBins.folders || []).filter((f) => f.id !== folderId);
+  const assign = state.mediaBins.assignments || {};
+  for (const [vpath, bid] of Object.entries(assign)) {
+    if (bid === folderId) delete assign[vpath];
+  }
+  if (state.activeBinScope === folderId) {
+    state.activeBinScope = "all";
+  }
+  renderVideoList();
+  setStatusMessage(`已删除文件夹「${target.name}」（原视频完好保留在未分类）`);
+  await persistMediaBins();
+}
+
+async function moveVideosToBin(videoPaths, folderId) {
+  const paths = Array.from(new Set((videoPaths || []).filter(Boolean)));
+  if (paths.length === 0) return;
+  const assign = state.mediaBins.assignments || {};
+  for (const vp of paths) {
+    if (folderId) assign[vp] = folderId;
+    else delete assign[vp];
+  }
+  state.mediaBins.assignments = assign;
+  const folder = folderId ? getBinFolderById(folderId) : null;
+  const destLabel = folder ? `「${folder.name}」` : "「未分类」";
+  renderVideoList();
+  showToast(`已将 ${paths.length} 个素材移至 ${destLabel}`);
+  await persistMediaBins();
+}
+
+async function setVideosColorTag(videoPaths, tagColor) {
+  const paths = Array.from(new Set((videoPaths || []).filter(Boolean)));
+  if (paths.length === 0) return;
+  const tags = state.mediaBins.tags || {};
+  for (const vp of paths) {
+    if (tagColor) tags[vp] = tagColor;
+    else delete tags[vp];
+  }
+  state.mediaBins.tags = tags;
+  renderVideoList();
+  setStatusMessage(
+    tagColor ? `已标记为「${MEDIA_TAG_META[tagColor]?.label || tagColor}」` : "已清除颜色标记"
+  );
+  await persistMediaBins();
+}
+
+function renderMediaBinBar() {
+  const bar = el("media-bin-bar");
+  if (!bar) return;
+  const allBtn = bar.querySelector('[data-bin-scope="all"]');
+  const unfiledBtn = bar.querySelector('[data-bin-scope="unfiled"]');
+  const sep = el("media-bin-active-sep");
+  const curName = el("media-bin-active-name");
+
+  const folder =
+    state.activeBinScope !== "all" && state.activeBinScope !== "unfiled"
+      ? getBinFolderById(state.activeBinScope)
+      : null;
+  if (state.activeBinScope !== "all" && state.activeBinScope !== "unfiled" && !folder) {
+    state.activeBinScope = "all";
+  }
+
+  allBtn?.classList.toggle("active", state.activeBinScope === "all");
+  unfiledBtn?.classList.toggle("active", state.activeBinScope === "unfiled");
+
+  if (folder) {
+    sep?.classList.remove("hidden");
+    if (curName) {
+      curName.classList.remove("hidden");
+      curName.textContent = folder.name;
+      curName.style.color = folder.color || "";
+    }
+  } else {
+    sep?.classList.add("hidden");
+    curName?.classList.add("hidden");
+  }
+}
+
+function buildMediaPoolEmptyContextMenuItems() {
+  return [
+    {
+      label: "新建文件夹（素材箱）",
+      onSelect: () => openMediaBinDialog(null),
+    },
+    { type: "separator" },
+    {
+      label: "显示全部素材与文件夹",
+      checked: state.activeBinScope === "all",
+      onSelect: () => {
+        state.activeBinScope = "all";
+        renderVideoList();
+      },
+    },
+    {
+      label: "仅查看未分类素材",
+      checked: state.activeBinScope === "unfiled",
+      onSelect: () => {
+        state.activeBinScope = "unfiled";
+        renderVideoList();
+      },
+    },
+    { type: "separator" },
+    {
+      label: "刷新素材目录",
+      onSelect: () => persistDirsAndScan(),
+    },
+    {
+      label: "打开输入文件夹",
+      onSelect: async () => {
+        const target = el("input-dir-field")?.value.trim();
+        if (target) {
+          await apiFetch("/api/open-folder", {
+            method: "POST",
+            body: JSON.stringify({ path: target }),
+          });
+        }
+      },
+    },
+  ];
+}
+
+function buildBinFolderContextMenuItems(folder) {
+  const insideVideos = state.videos.filter(
+    (v) => state.mediaBins.assignments?.[v.video_path] === folder.id
+  );
+  return [
+    {
+      label: `打开文件夹「${folder.name}」`,
+      onSelect: () => {
+        state.activeBinScope = folder.id;
+        renderVideoList();
+      },
+    },
+    {
+      label: "重命名 / 修改色标",
+      onSelect: () => openMediaBinDialog(folder),
+    },
+    {
+      label: `勾选文件夹内全部素材 (${insideVideos.length})`,
+      disabled: insideVideos.length === 0,
+      onSelect: () => {
+        for (const v of insideVideos) state.checkedVideoPaths.add(v.video_path);
+        renderVideoList();
+        showToast(`已勾选「${folder.name}」内 ${insideVideos.length} 个素材`);
+      },
+    },
+    { type: "separator" },
+    {
+      label: "删除文件夹（不删硬盘视频）",
+      danger: true,
+      onSelect: () => deleteMediaBin(folder.id),
+    },
+  ];
+}
+
 /* ==================== 媒体池扫描与渲染 ==================== */
 async function loadConfigAndScan() {
-  const cfg = await apiFetch("/api/config");
+  const [cfg] = await Promise.all([apiFetch("/api/config"), loadMediaBins()]);
   state.config = cfg;
   el("input-dir-field").value = cfg.input_dir;
   el("output-dir-field").value = cfg.output_dir;
@@ -796,9 +1146,22 @@ function getFilteredSortedVideos() {
   const keyword = (el("video-search-input")?.value || "").trim().toLowerCase();
   const stageFilter = state.mediaStageFilter || "all";
   const sortBy = state.mediaSortBy || "name";
+  const scope = state.activeBinScope || "all";
+  const assign = state.mediaBins.assignments || {};
+  const tags = state.mediaBins.tags || {};
   const gradeRank = { S: 0, A: 1, B: 2, WARN: 3 };
 
   let list = state.videos.filter((v) => {
+    const binId = assign[v.video_path] || "";
+    if (!keyword) {
+      if (scope === "unfiled" && binId) return false;
+      if (scope !== "all" && scope !== "unfiled" && binId !== scope) return false;
+      // 在「全部」视图下，若已有文件夹，已归类到文件夹里的视频折叠在对应文件夹内，避免重复散落
+      if (scope === "all" && binId && getBinFolderById(binId)) return false;
+    } else if (scope !== "all" && scope !== "unfiled" && binId !== scope) {
+      return false;
+    }
+
     if (
       keyword &&
       !v.filename.toLowerCase().includes(keyword) &&
@@ -820,6 +1183,12 @@ function getFilteredSortedVideos() {
       const gb = b.grade in gradeRank ? gradeRank[b.grade] : 9;
       return ga - gb || a.filename.localeCompare(b.filename);
     });
+  } else if (sortBy === "tag") {
+    list = [...list].sort((a, b) => {
+      const ta = tags[a.video_path] ? MEDIA_TAG_META[tags[a.video_path]]?.order ?? 8 : 9;
+      const tb = tags[b.video_path] ? MEDIA_TAG_META[tags[b.video_path]]?.order ?? 8 : 9;
+      return ta - tb || a.filename.localeCompare(b.filename);
+    });
   } else {
     list = [...list].sort((a, b) => a.filename.localeCompare(b.filename));
   }
@@ -828,6 +1197,47 @@ function getFilteredSortedVideos() {
 
 function buildVideoContextMenuItems(video) {
   const isChecked = state.checkedVideoPaths.has(video.video_path);
+  const targetPaths =
+    isChecked && state.checkedVideoPaths.size > 1
+      ? Array.from(state.checkedVideoPaths)
+      : [video.video_path];
+  const batchSuffix = targetPaths.length > 1 ? ` (${targetPaths.length}个)` : "";
+  const curBinId = state.mediaBins.assignments?.[video.video_path] || "";
+  const curTag = state.mediaBins.tags?.[video.video_path] || "";
+  const folders = state.mediaBins.folders || [];
+
+  const moveItems = folders.map((f) => ({
+    label: `移至文件夹：${f.name}${batchSuffix}`,
+    checked: curBinId === f.id,
+    onSelect: () => moveVideosToBin(targetPaths, f.id),
+  }));
+  if (curBinId) {
+    moveItems.push({
+      label: `移出文件夹（放回未分类）${batchSuffix}`,
+      onSelect: () => moveVideosToBin(targetPaths, ""),
+    });
+  }
+  moveItems.push({
+    label: "新建文件夹...",
+    onSelect: () => openMediaBinDialog(null),
+  });
+
+  const tagItems = [
+    ...Object.entries(MEDIA_TAG_META).map(([key, meta]) => ({
+      label: `色标：${meta.label}${batchSuffix}`,
+      checked: curTag === key,
+      onSelect: () => setVideosColorTag(targetPaths, key),
+    })),
+    ...(curTag
+      ? [
+          {
+            label: `清除颜色标记${batchSuffix}`,
+            onSelect: () => setVideosColorTag(targetPaths, ""),
+          },
+        ]
+      : []),
+  ];
+
   return [
     {
       label: "在监视器中加载",
@@ -842,6 +1252,10 @@ function buildVideoContextMenuItems(video) {
         renderVideoList();
       },
     },
+    { type: "separator" },
+    ...moveItems,
+    { type: "separator" },
+    ...tagItems,
     { type: "separator" },
     {
       label: "零消耗音频体检",
@@ -874,19 +1288,121 @@ function syncMediaViewButtons() {
   el("video-list")?.classList.toggle("view-grid", isGrid);
 }
 
+function attachVideoDragEvents(cardEl, video) {
+  cardEl.draggable = true;
+  cardEl.addEventListener("dragstart", (e) => {
+    const paths =
+      state.checkedVideoPaths.has(video.video_path) && state.checkedVideoPaths.size > 1
+        ? Array.from(state.checkedVideoPaths)
+        : [video.video_path];
+    state.draggingVideoPaths = paths;
+    cardEl.classList.add("is-dragging");
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", JSON.stringify(paths));
+    }
+  });
+  cardEl.addEventListener("dragend", () => {
+    state.draggingVideoPaths = [];
+    cardEl.classList.remove("is-dragging");
+    document.querySelectorAll(".is-drop-target").forEach((n) => n.classList.remove("is-drop-target"));
+  });
+}
+
 function renderVideoList() {
   const container = el("video-list");
   if (!container) return;
   syncMediaViewButtons();
+  renderMediaBinBar();
 
+  const keyword = (el("video-search-input")?.value || "").trim().toLowerCase();
   const filtered = getFilteredSortedVideos();
-  el("video-count-badge").textContent = String(filtered.length);
+  const showFolders = state.activeBinScope === "all" && !keyword;
+  const folders = showFolders ? state.mediaBins.folders || [] : [];
+
+  el("video-count-badge").textContent = String(state.videos.length);
   container.replaceChildren();
 
-  if (filtered.length === 0) {
+  // 1. 渲染自定义媒体池虚拟文件夹（支持点击进入、右键管理与直接拖入素材分类）
+  for (const folder of folders) {
+    const insideCount = state.videos.filter(
+      (v) => state.mediaBins.assignments?.[v.video_path] === folder.id
+    ).length;
+    const fCard = document.createElement("div");
+    fCard.className = "bin-folder-card";
+    fCard.style.setProperty("--bin-color", folder.color || "#4f8ef7");
+    fCard.title = `${folder.name}（${insideCount} 个素材 · 点击进入 · 可直接拖入视频分类）`;
+
+    const head = document.createElement("div");
+    head.className = "bin-folder-head";
+    const iconSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    iconSvg.setAttribute("viewBox", "0 0 16 16");
+    iconSvg.setAttribute("width", "15");
+    iconSvg.setAttribute("height", "15");
+    iconSvg.setAttribute("fill", "none");
+    iconSvg.setAttribute("stroke", "currentColor");
+    iconSvg.setAttribute("stroke-width", "1.3");
+    iconSvg.classList.add("bin-folder-icon");
+    const pth = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    pth.setAttribute("d", "M2 4.2h4.2l1.2 1.3H14v6.7a.8.8 0 0 1-.8.8H2.8a.8.8 0 0 1-.8-.8V4.2z");
+    iconSvg.appendChild(pth);
+
+    const fName = document.createElement("span");
+    fName.className = "bin-folder-name";
+    fName.textContent = folder.name;
+
+    const fCnt = document.createElement("span");
+    fCnt.className = "bin-folder-count mono-num";
+    fCnt.textContent = `${insideCount}`;
+
+    head.append(iconSvg, fName, fCnt);
+    fCard.appendChild(head);
+
+    if (state.mediaViewMode === "grid") {
+      const fSub = document.createElement("div");
+      fSub.className = "bin-folder-sub mono-num";
+      fSub.textContent = `${insideCount} 个素材 · 拖入归类`;
+      fCard.appendChild(fSub);
+    }
+
+    fCard.addEventListener("click", () => {
+      state.activeBinScope = folder.id;
+      renderVideoList();
+    });
+    fCard.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      ctxMenu?.open(e.clientX, e.clientY, buildBinFolderContextMenuItems(folder));
+    });
+    fCard.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      fCard.classList.add("is-drop-target");
+    });
+    fCard.addEventListener("dragleave", () => fCard.classList.remove("is-drop-target"));
+    fCard.addEventListener("drop", (e) => {
+      e.preventDefault();
+      fCard.classList.remove("is-drop-target");
+      let paths = state.draggingVideoPaths;
+      if (!paths.length && e.dataTransfer) {
+        try {
+          paths = JSON.parse(e.dataTransfer.getData("text/plain") || "[]");
+        } catch {
+          paths = [];
+        }
+      }
+      if (paths.length) moveVideosToBin(paths, folder.id);
+    });
+    container.appendChild(fCard);
+  }
+
+  if (filtered.length === 0 && folders.length === 0) {
     const hint = document.createElement("div");
     hint.className = "empty-hint";
-    hint.textContent = "未找到视频素材";
+    hint.textContent =
+      state.activeBinScope === "all"
+        ? "未找到视频素材（右键空白处可新建分类文件夹）"
+        : "当前分类下暂无素材（可直接拖入或右键移动素材）";
     container.appendChild(hint);
     updateMediaCheckedIndicator();
     return;
@@ -906,6 +1422,7 @@ function renderVideoList() {
     const stageText = video.has_highlights
       ? `${video.stage_label} ${video.selected_count}/${video.highlight_count}`
       : video.stage_label;
+    const tagColor = state.mediaBins.tags?.[video.video_path] || "";
 
     const chk = document.createElement("input");
     chk.type = "checkbox";
@@ -931,6 +1448,13 @@ function renderVideoList() {
       extSpan.className = "fn-ext";
       extSpan.textContent = extPart;
       title.appendChild(extSpan);
+    }
+    if (tagColor) {
+      const tagDot = document.createElement("span");
+      tagDot.className = "media-tag-dot";
+      tagDot.dataset.tag = tagColor;
+      tagDot.title = MEDIA_TAG_META[tagColor]?.label || tagColor;
+      title.appendChild(tagDot);
     }
 
     if (isGrid) {
@@ -1001,6 +1525,7 @@ function renderVideoList() {
       foot.append(title, subRow);
 
       card.append(thumbBox, foot);
+      attachVideoDragEvents(card, video);
       card.addEventListener("click", () => selectActiveVideo(video));
       card.addEventListener("contextmenu", (e) => {
         e.preventDefault();
@@ -1043,6 +1568,7 @@ function renderVideoList() {
       body.append(title, meta);
       card.append(chk, body);
 
+      attachVideoDragEvents(card, video);
       card.addEventListener("click", () => selectActiveVideo(video));
       card.addEventListener("contextmenu", (e) => {
         e.preventDefault();
@@ -1553,7 +2079,7 @@ async function loadHighlightsForVideo(video, resetResultBox = true, resetHistory
       }
     }
     renderHighlightsList();
-    syncLanguagePairUI();
+    syncLanguagePairUI(true);
     renderActiveSubtitlesPane();
     renderClipInspector();
     syncMonitorClipContext();
@@ -1563,7 +2089,7 @@ async function loadHighlightsForVideo(video, resetResultBox = true, resetHistory
     state.activeClipRank = null;
     historyMgr?.clear();
     renderHighlightsList();
-    syncLanguagePairUI();
+    syncLanguagePairUI(true);
     renderActiveSubtitlesPane();
     renderClipInspector();
     syncMonitorClipContext();
@@ -1677,6 +2203,8 @@ function getDisplayHighlights() {
         Array.isArray(h.subtitles) &&
         h.subtitles.some(
           (s) =>
+            String(s.text_tgt || "").toLowerCase().includes(q) ||
+            String(s.text_src || "").toLowerCase().includes(q) ||
             String(s.text_zh || "").toLowerCase().includes(q) ||
             String(s.text_en || "").toLowerCase().includes(q)
         )
@@ -2133,52 +2661,38 @@ function renderActiveSubtitlesPane() {
 
     const doMergeUp = () => {
       if (idx <= 0) return;
+      const lpCur = getActiveLanguagePair();
       const prev = subs[idx - 1];
+      const prevPair = resolveSubPairTexts(prev, lpCur);
+      const curPair = resolveSubPairTexts(s, lpCur);
+      const tgtSep = lpCur.actualTgtMeta.cjk ? "" : " ";
+      const srcSep = lpCur.srcMeta.cjk ? "" : " ";
       prev.end_sec = Number(Math.max(Number(prev.end_sec), Number(s.end_sec)).toFixed(2));
-      prev.text_zh = `${(prev.text_zh || "").trim()} ${(s.text_zh || "").trim()}`.trim();
-      prev.text_en = `${(prev.text_en || "").trim()} ${(s.text_en || "").trim()}`.trim();
-      prev.text_orig = `${(prev.text_orig || "").trim()} ${(s.text_orig || "").trim()}`.trim();
+      writeSubPairTexts(
+        prev,
+        [prevPair.tgtText, curPair.tgtText].filter(Boolean).join(tgtSep),
+        [prevPair.srcText, curPair.srcText].filter(Boolean).join(srcSep),
+        lpCur
+      );
+      prev.text_orig = [String(prev.text_orig || "").trim(), String(s.text_orig || "").trim()]
+        .filter(Boolean)
+        .join(srcSep);
       subs.splice(idx, 1);
       renderActiveSubtitlesPane();
       syncHighlightRowStates();
       syncVideoSubtitleOverlay();
+      syncTimelineData();
       recordHistory(`合并 #${item.rank} 第${idx + 1}句`, "sub");
       scheduleAutoSave();
     };
 
     const doSplit = () => {
-      const st = Number(s.start_sec || 0);
-      const ed = Number(s.end_sec || st + 1);
-      if (ed - st < 0.6) {
-        setStatusMessage("本句过短无法拆分", true);
-        return;
-      }
       const videoEl = el("review-video");
       const curT = videoEl ? Number(videoEl.currentTime || 0) : 0;
+      const st = Number(s.start_sec || 0);
+      const ed = Number(s.end_sec || st + 1);
       const usePlayhead = curT > st + 0.25 && curT < ed - 0.25;
-      const mid = Number((usePlayhead ? curT : (st + ed) / 2).toFixed(2));
-      const ratio = clampNum((mid - st) / Math.max(0.1, ed - st), 0.15, 0.85);
-      const zhText = (s.text_zh || "").trim();
-      const zhMid = Math.max(1, Math.min(zhText.length - 1, Math.round(zhText.length * ratio)));
-      const enWords = (s.text_en || "").trim().split(/\s+/).filter(Boolean);
-      const enMid = Math.max(1, Math.min(enWords.length - 1, Math.round(enWords.length * ratio)));
-
-      const secondHalf = {
-        start_sec: mid,
-        end_sec: Number(ed.toFixed(2)),
-        text_orig: s.text_orig || "",
-        text_zh: zhText.slice(zhMid).trim(),
-        text_en: enWords.slice(enMid).join(" ").trim(),
-      };
-      s.end_sec = mid;
-      s.text_zh = zhText.slice(0, zhMid).trim();
-      s.text_en = enWords.slice(0, enMid).join(" ").trim();
-      subs.splice(idx + 1, 0, secondHalf);
-      renderActiveSubtitlesPane();
-      syncHighlightRowStates();
-      syncVideoSubtitleOverlay();
-      recordHistory(`拆分 #${item.rank} 第${idx + 1}句`, "sub");
-      scheduleAutoSave();
+      splitSubtitleLineAtTime(item, idx, usePlayhead ? curT : null);
     };
 
     const doDelete = () => {
@@ -2264,24 +2778,25 @@ function renderActiveSubtitlesPane() {
       timeCol.appendChild(corr);
     }
 
-    // P1-10：字幕字数 / 时长安全告警（防烧录成片换行遮挡或闪屏）
+    // P1-10：字幕字数 / 时长安全告警（按当前译文语种自动适配 CJK 18 字 / 拼音字母 44 字阈值）
+    const lp = getActiveLanguagePair();
+    const pairTexts = resolveSubPairTexts(s, lp);
     const subDur = Math.max(0, Number(s.end_sec || 0) - Number(s.start_sec || 0));
-    const zhLen = (s.text_zh || "").trim().length;
-    if (zhLen > 18 || subDur < 0.7 || subDur > 6.5) {
+    const tgtLen = pairTexts.tgtText.length;
+    const maxLenLimit = lp.actualTgtMeta.cjk ? 18 : 44;
+    if (tgtLen > maxLenLimit || subDur < 0.7 || subDur > 6.5) {
       const warn = document.createElement("span");
       warn.className = "sub-warn-tag mono-num";
       const reasons = [];
-      if (zhLen > 18) reasons.push(`中文 ${zhLen}字>18`);
+      if (tgtLen > maxLenLimit) reasons.push(`${lp.actualTgtMeta.name} ${tgtLen}字>${maxLenLimit}`);
       if (subDur < 0.7) reasons.push(`时长 ${subDur.toFixed(2)}s 偏短`);
       if (subDur > 6.5) reasons.push(`时长 ${subDur.toFixed(1)}s 偏长`);
-      warn.textContent = zhLen > 18 ? `${zhLen}字` : `${subDur.toFixed(1)}s`;
+      warn.textContent = tgtLen > maxLenLimit ? `${tgtLen}字` : `${subDur.toFixed(1)}s`;
       warn.title = `字幕节奏提醒：${reasons.join(" · ")}`;
       timeCol.appendChild(warn);
     }
 
     // 中列：动态多语种双行精编（上行：目标译文，下行：源语言原文）
-    const lp = getActiveLanguagePair();
-    const pairTexts = resolveSubPairTexts(s, lp);
     const textCol = document.createElement("div");
     textCol.className = "sub-text-col";
 
@@ -2784,39 +3299,37 @@ function splitSubtitleLineAtTime(item, subIndex, cutSec = null) {
   const hasCut = cutSec !== null && cutSec > st + 0.25 && cutSec < ed - 0.25;
   const mid = Number((hasCut ? cutSec : (st + ed) / 2).toFixed(2));
   const ratio = clampNum((mid - st) / Math.max(0.1, ed - st), 0.15, 0.85);
-  const zhText = (s.text_zh || "").trim();
-  const enWords = (s.text_en || "").trim().split(/\s+/).filter(Boolean);
-  const origWords = (s.text_orig || "").trim().split(/\s+/).filter(Boolean);
 
-  // 修复 P2-01：极短单字/单词字幕不允许劈出空后半句，并按比例同步拆分 text_orig
-  if (zhText.length <= 1 && enWords.length <= 1) {
+  const lp = getActiveLanguagePair();
+  const { tgtText, srcText } = resolveSubPairTexts(s, lp);
+  const [tgtA, tgtB] = splitTextByRatio(tgtText, ratio, lp.actualTgtMeta.cjk);
+  const [srcA, srcB] = splitTextByRatio(srcText, ratio, lp.srcMeta.cjk);
+  const [origA, origB] = splitTextByRatio(s.text_orig || srcText, ratio, lp.srcMeta.cjk);
+
+  if (!tgtB && !srcB) {
     setStatusMessage("本句文本过短，无法继续拆分", true);
     return false;
   }
 
-  const zhMid = zhText.length > 1 ? Math.max(1, Math.min(zhText.length - 1, Math.round(zhText.length * ratio))) : zhText.length;
-  const enMid = enWords.length > 1 ? Math.max(1, Math.min(enWords.length - 1, Math.round(enWords.length * ratio))) : enWords.length;
-  const origMid = origWords.length > 1 ? Math.max(1, Math.min(origWords.length - 1, Math.round(origWords.length * ratio))) : origWords.length;
-
   const secondHalf = {
     start_sec: mid,
     end_sec: Number(ed.toFixed(2)),
-    text_orig: origWords.length > 1 ? origWords.slice(origMid).join(" ").trim() : "",
-    text_zh: zhText.length > 1 ? zhText.slice(zhMid).trim() : "",
-    text_en: enWords.length > 1 ? enWords.slice(enMid).join(" ").trim() : "",
+    text_orig: origB,
   };
+  writeSubPairTexts(secondHalf, tgtB, srcB, lp);
+
   s.end_sec = mid;
-  if (origWords.length > 1) s.text_orig = origWords.slice(0, origMid).join(" ").trim();
-  if (zhText.length > 1) s.text_zh = zhText.slice(0, zhMid).trim();
-  if (enWords.length > 1) s.text_en = enWords.slice(0, enMid).join(" ").trim();
+  s.text_orig = origA;
+  writeSubPairTexts(s, tgtA, srcA, lp);
   item.subtitles.splice(subIndex + 1, 0, secondHalf);
 
   state.activeClipRank = Number(item.rank);
   renderActiveSubtitlesPane();
   syncHighlightRowStates();
   syncVideoSubtitleOverlay();
+  syncTimelineData();
   syncMonitorClipContext();
-  recordHistory(`剃刀拆分 #${item.rank} 第${subIndex + 1}句`, "sub");
+  recordHistory(`拆分 #${item.rank} 第${subIndex + 1}句`, "sub");
   scheduleAutoSave();
   setStatusMessage(`已在 ${formatTimecode(mid, true)} 拆分字幕`);
   return true;
@@ -3057,12 +3570,12 @@ function runSubFind(jumpToFirst = false) {
     return;
   }
   const q = qRaw.toLowerCase();
+  const lp = getActiveLanguagePair();
   for (const h of state.highlightsData.highlights) {
     const subs = Array.isArray(h.subtitles) ? h.subtitles : [];
     subs.forEach((s, idx) => {
-      const zh = String(s.text_zh || "").toLowerCase();
-      const en = String(s.text_en || "").toLowerCase();
-      if (zh.includes(q) || en.includes(q)) {
+      const { tgtText, srcText } = resolveSubPairTexts(s, lp);
+      if (tgtText.toLowerCase().includes(q) || srcText.toLowerCase().includes(q)) {
         state.subFindMatches.push({ rank: Number(h.rank), subIndex: idx });
       }
     });
@@ -3122,12 +3635,13 @@ function replaceCurrentSubMatch() {
   const clip = getClipByRank(hit.rank);
   const sub = clip?.subtitles?.[hit.subIndex];
   if (!sub) return;
-  const rZh = replaceTextCaseInsensitive(sub.text_zh || "", findStr, repStr);
-  const rEn = replaceTextCaseInsensitive(sub.text_en || "", findStr, repStr);
-  const total = rZh.count + rEn.count;
+  const lp = getActiveLanguagePair();
+  const pair = resolveSubPairTexts(sub, lp);
+  const rTgt = replaceTextCaseInsensitive(pair.tgtText, findStr, repStr);
+  const rSrc = replaceTextCaseInsensitive(pair.srcText, findStr, repStr);
+  const total = rTgt.count + rSrc.count;
   if (total === 0) return;
-  sub.text_zh = rZh.text;
-  sub.text_en = rEn.text;
+  writeSubPairTexts(sub, rTgt.text, rSrc.text, lp);
   renderActiveSubtitlesPane();
   syncVideoSubtitleOverlay();
   syncTimelineData();
@@ -3141,14 +3655,17 @@ function replaceAllSubMatches() {
   const findStr = (el("sub-find-input")?.value || "").trim();
   const repStr = el("sub-replace-input")?.value ?? "";
   if (!findStr || !state.highlightsData?.highlights) return;
+  const lp = getActiveLanguagePair();
   let total = 0;
   for (const h of state.highlightsData.highlights) {
     for (const s of h.subtitles || []) {
-      const rZh = replaceTextCaseInsensitive(s.text_zh || "", findStr, repStr);
-      const rEn = replaceTextCaseInsensitive(s.text_en || "", findStr, repStr);
-      if (rZh.count > 0) s.text_zh = rZh.text;
-      if (rEn.count > 0) s.text_en = rEn.text;
-      total += rZh.count + rEn.count;
+      const pair = resolveSubPairTexts(s, lp);
+      const rTgt = replaceTextCaseInsensitive(pair.tgtText, findStr, repStr);
+      const rSrc = replaceTextCaseInsensitive(pair.srcText, findStr, repStr);
+      if (rTgt.count > 0 || rSrc.count > 0) {
+        writeSubPairTexts(s, rTgt.text, rSrc.text, lp);
+      }
+      total += rTgt.count + rSrc.count;
     }
   }
   if (total === 0) {
@@ -3557,9 +4074,27 @@ function initAppMenuBar() {
       label: "帮助",
       getItems: () => [
         {
-          label: "快捷键速查表",
+          label: "新手操作手册",
+          hint: "F1",
+          onSelect: () => openManualDialog("quickstart"),
+        },
+        {
+          label: "全量快捷键速查表",
           hint: "?",
-          onSelect: () => el("shortcuts-dialog")?.showModal?.(),
+          onSelect: () => openShortcutsDialog(),
+        },
+        {
+          label: "加载 30 秒体验示例工程",
+          onSelect: () => loadDemoProjectIntoWorkbench(),
+        },
+        { type: "separator" },
+        {
+          label: "安全与本地隐私说明",
+          onSelect: () => openManualDialog("faq"),
+        },
+        {
+          label: "关于 Solacut",
+          onSelect: () => el("about-dialog")?.showModal?.(),
         },
       ],
     },
@@ -4173,13 +4708,21 @@ function initPlayerEvents() {
       return;
     }
 
+    // F1 打开内置新手操作手册
+    if (e.code === "F1") {
+      e.preventDefault();
+      stopShuttle(true);
+      videoEl.pause();
+      openManualDialog("quickstart");
+      return;
+    }
+
     // ? 打开快捷键速查（修复 P1-06：打开弹窗前立刻停止倒放 rAF）
     if (e.key === "?" || (e.shiftKey && e.code === "Slash")) {
       e.preventDefault();
       stopShuttle(true);
       videoEl.pause();
-      const dlg = el("shortcuts-dialog");
-      if (dlg && !dlg.open && typeof dlg.showModal === "function") dlg.showModal();
+      openShortcutsDialog();
       return;
     }
 
@@ -4571,6 +5114,19 @@ async function triggerExport(specificRanks = null) {
   }
   await saveHighlightsNow(true);
 
+  const exportTgtSel = el("sel-export-target-lang");
+  const subModeVal = el("sel-subtitle-lang")?.value || "bilingual";
+  if (exportTgtSel && subModeVal !== "source") {
+    const lp = getActiveLanguagePair(exportTgtSel.value);
+    if (lp.tgt !== lp.actualTgt) {
+      showToast(
+        `当前字幕为 ${lp.actualTgtMeta.name}，如需导出 ${lp.tgtMeta.name} 请先点击上方「重翻为${lp.tgtMeta.short}」`,
+        true
+      );
+      return;
+    }
+  }
+
   const selectedMode =
     document.querySelector('input[name="export-mode"]:checked')?.value || "lossless";
   const payload = {
@@ -4830,6 +5386,89 @@ function bindEvents() {
   el("input-asr-lang")?.addEventListener("change", () => syncLanguagePairUI());
   el("sel-target-lang")?.addEventListener("change", () => syncLanguagePairUI());
 
+  // 交付页六语种译文切换 & 一键重翻联动
+  el("sel-export-target-lang")?.addEventListener("change", () => syncLanguagePairUI(false));
+  el("btn-export-switch-lang")?.addEventListener("click", () => {
+    if (!state.highlightsData) {
+      showToast("请先完成 AI 粗筛后再切换语种重翻", true);
+      return;
+    }
+    const desiredTgt = el("sel-export-target-lang")?.value || "zh";
+    const lp = getActiveLanguagePair(desiredTgt);
+    if (desiredTgt === lp.src) {
+      showToast(`源语种与目标译文不能相同（均为 ${lp.srcMeta.name}）`, true);
+      return;
+    }
+    triggerRetranslate(null, null, null, lp.src, desiredTgt);
+  });
+  el("sub-pane-lang-pill")?.addEventListener("click", () => openRetranslateDialog(null));
+
+  // 媒体池新建文件夹、空白区右键、面包屑导航与拖拽移出
+  el("btn-media-new-folder")?.addEventListener("click", () => openMediaBinDialog(null));
+  el("video-list")?.addEventListener("contextmenu", (e) => {
+    if (e.target.closest(".video-card-grid, .video-item, .bin-folder-card")) return;
+    e.preventDefault();
+    ctxMenu?.open(e.clientX, e.clientY, buildMediaPoolEmptyContextMenuItems());
+  });
+  el("media-bin-bar")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".bin-crumb");
+    if (!btn) return;
+    state.activeBinScope = btn.dataset.binScope || "all";
+    renderVideoList();
+  });
+  const unfiledCrumb = document.querySelector('#media-bin-bar [data-bin-scope="unfiled"]');
+  if (unfiledCrumb) {
+    unfiledCrumb.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      unfiledCrumb.classList.add("is-drop-target");
+    });
+    unfiledCrumb.addEventListener("dragleave", () => unfiledCrumb.classList.remove("is-drop-target"));
+    unfiledCrumb.addEventListener("drop", (e) => {
+      e.preventDefault();
+      unfiledCrumb.classList.remove("is-drop-target");
+      let paths = state.draggingVideoPaths;
+      if (!paths.length && e.dataTransfer) {
+        try {
+          paths = JSON.parse(e.dataTransfer.getData("text/plain") || "[]");
+        } catch {
+          paths = [];
+        }
+      }
+      if (paths.length) moveVideosToBin(paths, "");
+    });
+  }
+  el("media-bin-color-picker")?.addEventListener("click", (e) => {
+    const dot = e.target.closest(".bin-color-dot");
+    if (!dot) return;
+    state.selectedBinColor = dot.dataset.binColor || "#4f8ef7";
+    document.querySelectorAll("#media-bin-color-picker .bin-color-dot").forEach((d) => {
+      d.classList.toggle("active", d === dot);
+    });
+  });
+  el("btn-confirm-media-bin")?.addEventListener("click", () => saveMediaBinFromDialog());
+  el("media-bin-name-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveMediaBinFromDialog();
+    }
+  });
+
+  // 全量快捷键实时检索与内置新手操作手册章节切换
+  el("shortcut-search-input")?.addEventListener("input", (e) => filterShortcutsTable(e.target.value));
+  el("manual-nav")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".manual-nav-btn");
+    if (!btn) return;
+    switchManualSection(btn.dataset.manualSec || "quickstart");
+  });
+  el("btn-manual-load-demo")?.addEventListener("click", async () => {
+    el("manual-dialog")?.close();
+    await loadDemoProjectIntoWorkbench();
+  });
+  el("btn-manual-open-shortcuts")?.addEventListener("click", () => {
+    el("manual-dialog")?.close();
+    openShortcutsDialog();
+  });
+
   el("sel-asr-provider")?.addEventListener("change", () => syncAsrProviderVisibility());
 
   el("btn-hl-select-all")?.addEventListener("click", () => {
@@ -4899,11 +5538,11 @@ function bindEvents() {
     });
   }
 
-  document.querySelectorAll(".seg-btn").forEach((btn) => {
+  document.querySelectorAll("#pane-clips .seg-btn[data-sort]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".seg-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll("#pane-clips .seg-btn[data-sort]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
-      state.sortBy = btn.dataset.sort;
+      state.sortBy = btn.dataset.sort || "rank";
       renderHighlightsList();
     });
   });
@@ -4990,25 +5629,34 @@ function bindEvents() {
   el("onboarding-provider-preset")?.addEventListener("change", (e) => {
     const baseEl = el("onboarding-base-url");
     if (!baseEl) return;
-    baseEl.value = e.target.value === "openai" ? "https://api.openai.com/v1" : "https://api.deepseek.com";
+    baseEl.value = e.target.value === "openai" ? "https://api.openai.com/v1" : "https://api.deepseek.com/v1";
   });
 
   el("btn-onboarding-save")?.addEventListener("click", async () => {
     const keyVal = el("onboarding-api-key")?.value.trim() || "";
-    const baseVal = el("onboarding-base-url")?.value.trim() || "https://api.deepseek.com";
+    const baseVal = el("onboarding-base-url")?.value.trim() || "https://api.deepseek.com/v1";
     const preset = el("onboarding-provider-preset")?.value || "deepseek";
     if (!keyVal) {
       showToast("请先粘贴 API Key，或点击左下角体验 30 秒示例", true);
       return;
     }
+    const normalizedBase = baseVal.replace(/\/+$/, "");
+    // 修复 P0-3：DeepSeek 预设清空 ASR_BASE_URL 让后端自动路由官方 /v1/tools/asr；OpenAI 兼容自动拼 /audio/transcriptions
+    const asrProvider = preset === "deepseek" ? "deepseek" : "openai_compatible";
+    const asrBaseUrl =
+      preset === "deepseek"
+        ? ""
+        : normalizedBase.endsWith("/audio/transcriptions")
+          ? normalizedBase
+          : `${normalizedBase}/audio/transcriptions`;
     try {
       const cfg = await apiFetch("/api/config", {
         method: "POST",
         body: JSON.stringify({
           base_url: baseVal,
           api_key: keyVal,
-          asr_provider: preset === "deepseek" ? "deepseek" : "openai_compatible",
-          asr_base_url: baseVal,
+          asr_provider: asrProvider,
+          asr_base_url: asrBaseUrl,
           asr_api_key: keyVal,
         }),
       });
@@ -5027,6 +5675,59 @@ function bindEvents() {
   });
 }
 
+function openShortcutsDialog() {
+  const dlg = el("shortcuts-dialog");
+  const searchEl = el("shortcut-search-input");
+  if (searchEl) {
+    searchEl.value = "";
+    filterShortcutsTable("");
+  }
+  if (dlg && !dlg.open && typeof dlg.showModal === "function") {
+    dlg.showModal();
+    setTimeout(() => searchEl?.focus(), 20);
+  }
+}
+
+function filterShortcutsTable(query) {
+  const q = String(query || "").trim().toLowerCase();
+  const grid = el("shortcut-sections-grid");
+  if (!grid) return;
+  let visibleCount = 0;
+  grid.querySelectorAll(".shortcut-sec").forEach((sec) => {
+    let secHits = 0;
+    sec.querySelectorAll(".shortcut-row").forEach((row) => {
+      const matched = !q || (row.textContent || "").toLowerCase().includes(q);
+      row.classList.toggle("is-hidden", !matched);
+      if (matched) {
+        secHits += 1;
+        visibleCount += 1;
+      }
+    });
+    sec.classList.toggle("is-hidden", secHits === 0);
+  });
+  const badge = el("shortcuts-count-badge");
+  if (badge) badge.textContent = `${visibleCount} 项`;
+}
+
+function switchManualSection(secId = "quickstart") {
+  document.querySelectorAll("#manual-nav .manual-nav-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.manualSec === secId);
+  });
+  document.querySelectorAll("#manual-content .manual-section").forEach((sec) => {
+    sec.classList.toggle("hidden", sec.dataset.manualPanel !== secId);
+  });
+  const box = el("manual-content");
+  if (box) box.scrollTop = 0;
+}
+
+function openManualDialog(secId = "quickstart") {
+  switchManualSection(secId);
+  const dlg = el("manual-dialog");
+  if (dlg && !dlg.open && typeof dlg.showModal === "function") {
+    dlg.showModal();
+  }
+}
+
 async function loadDemoProjectIntoWorkbench() {
   try {
     setStatusMessage("正在载入 30 秒示例工程...");
@@ -5036,7 +5737,7 @@ async function loadDemoProjectIntoWorkbench() {
       (v) => v.stem === res.stem || v.video_path === res.video_path
     );
     if (target) {
-      await selectVideo(target);
+      await selectActiveVideo(target);
       showToast("已载入 30 秒示例工程：可直接审片、改字幕、试导出");
     } else {
       showToast("示例工程已导入输入目录");

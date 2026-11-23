@@ -24,10 +24,10 @@ export const DOMAIN = 'solacut.com';
 export const SITE_URL = `https://${DOMAIN}`;
 
 /** 当前公开发布版本号 */
-export const VERSION = 'v0.9.0-beta';
+export const VERSION = 'v0.9.1-beta';
 
 /** 顶栏紧凑展示版本短标 */
-export const VERSION_SHORT = 'v0.9 Beta';
+export const VERSION_SHORT = 'v0.9.1 Beta';
 
 /** 当前版本发布日期（ISO 格式 YYYY-MM-DD） */
 export const RELEASE_DATE = '2026-11-23';
@@ -53,6 +53,9 @@ export const NOTICES_URL = `${REPO_URL}/blob/main/THIRD_PARTY_NOTICES.md`;
 /** 开源许可协议链接 */
 export const LICENSE_URL = `${REPO_URL}/blob/main/LICENSE`;
 
+/** 完整用户操作手册链接 */
+export const MANUAL_URL = `${REPO_URL}/blob/main/USER_MANUAL.md`;
+
 /** 问题反馈与公测讨论区链接 */
 export const ISSUES_URL = `${REPO_URL}/issues`;
 
@@ -69,7 +72,7 @@ export const DOWNLOAD_LINKS = {
   /**
    * 正式发版包真实 64 位 SHA-256 哈希
    */
-  checksumSha256: 'ddce1b2c3db6fc5a9ed1d56c073fda9895a0cae462a481377c2ad5e9d8f64a51',
+  checksumSha256: '1b3ab1b86275010bb77d9ba8df739b75ee3e75373de381ac5dce7390468e710c',
   /** 便携包体积说明（内含静态 FFmpeg/FFprobe + WebView2 壳 + 228,210 条商用无限制语料索引） */
   fileSize: '247.4 MB',
   /** 目标系统要求 */
@@ -89,6 +92,7 @@ export const SITE_CONFIG = {
   RELEASE_PUBLISHED,
   REPO_PUBLISHED,
   REPO_URL,
+  MANUAL_URL,
   NOTICES_URL,
   LICENSE_URL,
   ISSUES_URL,

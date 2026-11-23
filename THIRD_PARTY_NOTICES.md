@@ -6,7 +6,7 @@
 
 | 组件 | 用途 | 许可协议 | 官方主页 |
 | :--- | :--- | :--- | :--- |
-| **FFmpeg / FFprobe** | 本地音频抽取、无损流切片与视频字幕渲染 | LGPL 2.1+ / GPL 2+（独立命令行可执行文件调用） | https://ffmpeg.org |
+| **FFmpeg / FFprobe** | 本地音频抽取、无损流切片与视频字幕渲染 | GPLv3（便携包内置 `gyan.dev` 预编译独立 CLI 可执行文件，附 `bin/LICENSE.FFmpeg-GPLv3.txt`；源码详见 https://ffmpeg.org/download.html ） | https://ffmpeg.org |
 | **FastAPI / Uvicorn / Starlette** | 本地审片工作台后端服务 | MIT / BSD-3-Clause | https://fastapi.tiangolo.com |
 | **pywebview** | 原生 Windows Edge WebView2 无边框桌面容器 | BSD-3-Clause | https://pywebview.flowrl.com |
 | **faster-whisper / ctranslate2** | 可选本地离线 GPU 语音识别 | MIT | https://github.com/SYSTRAN/faster-whisper |
@@ -15,7 +15,7 @@
 
 ## 二、商用无限制开源平行语料署名（便携分发包内置）
 
-便携分发包通过 `python src/corpus_builder.py --lang-pair all --commercial-only` 构建，**仅内置允许商用分发的开放许可语料（共计 228,542 条跨 6 大语种对）**：
+便携分发包通过 `python src/corpus_builder.py --lang-pair all --commercial-only` 构建，**仅内置允许商用分发的开放许可语料（共计 228,210 条跨 6 大语种对）**：
 
 1. **OPUS Tatoeba (v2026-07-08)** — `CC BY 2.0 FR`  
    来源：Tatoeba Project (https://tatoeba.org) / OPUS (https://opus.nlpl.eu/Tatoeba.php)

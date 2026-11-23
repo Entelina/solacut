@@ -12,6 +12,7 @@
   "total_duration_sec": 30.0,
   "total_duration_str": "00:30",
   "highlight_count": 2,
+  "elapsed_sec": 0.0,
   "bilingual_subtitles": true,
   "translated_ok_count": 2,
   "translation_fallback_count": 0,

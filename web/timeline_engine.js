@@ -1259,7 +1259,7 @@ export class DualTimelineEngine {
             ctx.clip();
             ctx.font = '10.5px "Segoe UI", "Microsoft YaHei UI", sans-serif';
             ctx.fillStyle = isCur ? "#f5f5f7" : "#c6c8d0";
-            ctx.fillText((s.text_zh || s.text_en || "").trim(), drawX + 4, subY + 16);
+            ctx.fillText((s.text_tgt || s.text_zh || s.text_en || "").trim(), drawX + 4, subY + 16);
             ctx.restore();
           }
         }

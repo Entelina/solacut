@@ -7,7 +7,7 @@
 - `run_export_pipeline`: 根据人工审片确认后的 `*_highlights.json` 一键导出切片与剪辑软件标记。
 
 命令行运行示例：
-    python src/pipeline.py input/shylily_vods/shylily_1.mp4
+    python src/pipeline.py input/demo_highlight_30s.mp4
     python src/pipeline.py input/ --output-dir output --auto-export
 """
 
@@ -59,13 +59,21 @@ def _peaks_cache_matches(
     audio_stream: int,
     vocal_bandpass: bool,
     top_percent: float,
+    video_path: Path | None = None,
 ) -> bool:
-    """检查已有 Step 1 缓存是否与当前选择的音轨、带通滤波与前百分比设置完全一致。"""
+    """检查已有 Step 1 缓存是否与当前源视频指纹、音轨、带通滤波与前百分比设置完全一致。"""
     if not peaks_data:
         return False
     # 早期未携带 vocal_bandpass 字段的老缓存自动视作过期，确保平滑升级到带通检测
     if "vocal_bandpass" not in peaks_data:
         return False
+    if video_path is not None and video_path.is_file():
+        cached_size = peaks_data.get("video_size")
+        cached_mtime = peaks_data.get("video_mtime_ns")
+        if cached_size is not None and cached_mtime is not None:
+            st = video_path.stat()
+            if int(cached_size) != int(st.st_size) or int(cached_mtime) != int(st.st_mtime_ns):
+                return False
     try:
         cached_stream = int(peaks_data.get("audio_stream", 0))
         cached_bp = bool(peaks_data.get("vocal_bandpass"))
@@ -301,6 +309,7 @@ def run_quick_diagnose(
         audio_stream=audio_stream,
         vocal_bandpass=vocal_bandpass,
         top_percent=top_percent,
+        video_path=src_video,
     )
 
     if cache_ok:
@@ -413,6 +422,7 @@ def run_analysis_pipeline(
         audio_stream=audio_stream,
         vocal_bandpass=vocal_bandpass,
         top_percent=top_percent,
+        video_path=src_video,
     )
     step1_regenerated = False
 

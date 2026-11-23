@@ -15,10 +15,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_IS_FROZEN = bool(getattr(sys, "frozen", False))
+PROJECT_ROOT = (
+    Path(sys.executable).resolve().parent
+    if _IS_FROZEN
+    else Path(__file__).resolve().parent.parent
+)
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 DEFAULT_WORKBENCH_CONFIG_PATH = PROJECT_ROOT / ".workbench_config.json"
 
@@ -406,4 +413,10 @@ def write_env_settings(
             lines.append(f"{key}={val}")
 
     env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp_env = env_path.with_name(f".env.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(tmp_env, env_path)
+    finally:
+        if tmp_env.exists():
+            tmp_env.unlink(missing_ok=True)

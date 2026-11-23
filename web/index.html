@@ -310,12 +310,25 @@
               <rect x="2" y="9" width="5" height="4.5" rx="0.6"/><rect x="9" y="9" width="5" height="4.5" rx="0.6"/>
             </svg>
           </button>
+          <button type="button" id="btn-media-new-folder" class="nle-icon-btn" title="新建媒体文件夹（也可在媒体池空白处右键新建）" aria-label="新建文件夹">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
+              <path d="M2 4.2h4.2l1.2 1.3H14v6.7a.8.8 0 0 1-.8.8H2.8a.8.8 0 0 1-.8-.8V4.2z"/>
+              <path d="M8 7.4v3.4M6.3 9.1h3.4"/>
+            </svg>
+          </button>
           <button type="button" id="btn-media-view-list" class="seg-btn icon-only active" data-view="list" title="紧凑列表视图" aria-label="列表视图">
             <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
               <path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>
             </svg>
           </button>
         </div>
+      </div>
+      <!-- 媒体池虚拟文件夹（Bin）导航与面包屑条（支持拖入/拖出分类，不改动磁盘原视频路径） -->
+      <div id="media-bin-bar" class="media-bin-bar" aria-label="素材分类导航">
+        <button type="button" class="bin-crumb active" data-bin-scope="all" title="显示全部素材与文件夹">全部</button>
+        <button type="button" class="bin-crumb" data-bin-scope="unfiled" title="仅显示未归类素材（拖拽素材到此处可移出文件夹）">未分类</button>
+        <span id="media-bin-active-sep" class="bin-crumb-sep hidden" aria-hidden="true">/</span>
+        <span id="media-bin-active-name" class="bin-crumb-current hidden"></span>
       </div>
       <div class="media-filter-bar">
         <select id="sel-media-stage-filter" class="nle-select-xs" title="按状态筛选" aria-label="按状态筛选">
@@ -328,6 +341,7 @@
           <option value="name" selected>按名称</option>
           <option value="grade">按评级</option>
           <option value="size">按大小</option>
+          <option value="tag">按色标</option>
         </select>
         <label class="nle-check compact" title="全选 / 取消全选当前列表">
           <input type="checkbox" id="chk-select-all-videos">
@@ -598,6 +612,7 @@
         <div class="toolbar-cluster min-w-0">
           <span id="sub-pane-clip-label" class="sub-pane-clip mono-num">未选中片段</span>
           <span id="sub-pane-count" class="nle-badge mono-num">0</span>
+          <button type="button" id="sub-pane-lang-pill" class="nle-badge lang-pair-pill mono-num" title="当前字幕语言对 · 点击切换 6 语种并重翻">EN → ZH</button>
         </div>
         <div class="toolbar-cluster">
           <button type="button" id="btn-sub-find-toggle" class="nle-icon-btn" aria-pressed="false" title="全文查找与替换字幕 (Ctrl+F)" aria-label="查找替换">
@@ -620,7 +635,7 @@
       <!-- 字幕全文查找与替换条（对标 DaVinci AutoCaption Search/Replace，支持跨全部高光批量替换+一键撤销） -->
       <div id="sub-find-bar" class="sub-find-bar hidden" aria-label="字幕查找与替换">
         <div class="sub-find-row">
-          <input id="sub-find-input" class="nle-search-input" type="search" placeholder="查找中文或英文..." aria-label="查找字幕">
+          <input id="sub-find-input" class="nle-search-input" type="search" placeholder="查找译文或原文（支持 6 语种）..." aria-label="查找字幕">
           <span id="sub-find-count" class="nle-badge mono-num">0/0</span>
           <button type="button" id="btn-sub-find-prev" class="nle-icon-btn" title="上一处" aria-label="上一处">
             <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 10l4-4 4 4"/></svg>
@@ -895,6 +910,24 @@
                   <input type="radio" name="export-mode" value="landscape">
                   <span>横屏 16:9</span>
                 </label>
+              </div>
+
+              <div class="insp-row">
+                <label class="insp-lbl" for="sel-export-target-lang">译文语种</label>
+                <div class="insp-ctrl input-action-row">
+                  <select id="sel-export-target-lang" title="选择输出字幕的目标译文语种（支持中/英/日/韩/俄/西 6 语种）">
+                    <option value="zh" selected>简体中文 (ZH)</option>
+                    <option value="en">英语 (EN)</option>
+                    <option value="ja">日语 (JA)</option>
+                    <option value="ko">韩语 (KO)</option>
+                    <option value="ru">俄语 (RU)</option>
+                    <option value="es">西班牙语 (ES)</option>
+                  </select>
+                  <button type="button" id="btn-export-switch-lang" class="nle-btn-xs" title="一键将该视频高光字幕精翻为所选目标语种">切换重翻</button>
+                </div>
+              </div>
+              <div id="export-lang-pair-hint" class="export-lang-hint mono-num">
+                支持中/英/日/韩/俄/西 6 语种双语或单语导出
               </div>
 
               <div class="insp-row">
@@ -1358,64 +1391,262 @@
     </form>
   </dialog>
 
-  <!-- 专业 NLE 快捷键速查弹窗（对标 Premiere Pro / DaVinci Resolve） -->
+  <!-- 专业 NLE 全量快捷键速查弹窗（100% 与真实键盘绑定核实同步，支持实时检索） -->
   <dialog id="shortcuts-dialog" class="shortcuts-dialog" closedby="any" aria-labelledby="shortcuts-dialog-title">
     <form method="dialog" class="dialog-inner shortcuts-inner">
       <div class="dialog-header">
-        <h2 id="shortcuts-dialog-title">快捷键</h2>
+        <div class="toolbar-cluster">
+          <h2 id="shortcuts-dialog-title">全量快捷键速查</h2>
+          <span class="nle-badge mono-num" id="shortcuts-count-badge">38 项</span>
+        </div>
+        <div class="toolbar-cluster">
+          <input id="shortcut-search-input" class="nle-search-input shortcut-search-input" type="search" placeholder="检索按键或功能（如 拆分 / J / 循环）..." aria-label="检索快捷键">
+          <button type="submit" value="cancel" class="nle-icon-btn" aria-label="关闭">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+              <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="dialog-body scroller">
+        <div class="shortcut-sections" id="shortcut-sections-grid">
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">播控与梭巡 (J/K/L)</div>
+            <div class="shortcut-row"><kbd>Space</kbd><span>播放 / 暂停（任意焦点优先播控）</span></div>
+            <div class="shortcut-row"><kbd>L</kbd><span>正向多档加速梭巡 (1x→2x→4x→8x)</span></div>
+            <div class="shortcut-row"><kbd>K</kbd><span>急停暂停</span></div>
+            <div class="shortcut-row"><kbd>J</kbd><span>反向多档加速梭巡 (-1x→-2x→-4x→-8x)</span></div>
+            <div class="shortcut-row"><kbd>K</kbd>+<kbd>J</kbd> / <kbd>K</kbd>+<kbd>L</kbd><span>按住 0.5x 慢退 / 慢放精听</span></div>
+            <div class="shortcut-row"><kbd>←</kbd> / <kbd>→</kbd><span>单帧精确后退 / 前进</span></div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>←/→</kbd><span>步进 ±1 秒（也可单按 , / .）</span></div>
+            <div class="shortcut-row"><kbd>Home</kbd> / <kbd>End</kbd><span>跳至片头 / 片尾（也可按 ; / '）</span></div>
+            <div class="shortcut-row"><kbd>P</kbd><span>切换影院全屏预览（Esc 退出）</span></div>
+            <div class="shortcut-row"><kbd>M</kbd> / <kbd>Ctrl</kbd>+<kbd>/</kbd><span>开启 / 关闭当前片段循环播放</span></div>
+          </div>
+
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">入出点与高光修剪</div>
+            <div class="shortcut-row"><kbd>I</kbd> / <kbd>O</kbd><span>设当前高光入点 / 出点</span></div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>I</kbd> / <kbd>Shift</kbd>+<kbd>O</kbd><span>播放头跳至当前段入点 / 出点</span></div>
+            <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>I</kbd> / <kbd>Alt</kbd>+<kbd>O</kbd><span>还原当前段初始入点 / 出点</span></div>
+            <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>X</kbd><span>同时还原当前段初始入出点</span></div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>[</kbd> / <kbd>]</kbd><span>波纹裁剪段头 / 段尾到播放头</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>[</kbd> / <kbd>]</kbd><span>波纹裁剪段头 / 段尾（达芬奇键位）</span></div>
+            <div class="shortcut-row"><kbd>/</kbd> / <kbd>Alt</kbd>+<kbd>/</kbd><span>从入点重播当前高光片段</span></div>
+            <div class="shortcut-row"><kbd>↑</kbd> / <kbd>↓</kbd><span>选中上一条 / 下一条高光</span></div>
+            <div class="shortcut-row"><kbd>Enter</kbd><span>播放预览当前选中高光</span></div>
+            <div class="shortcut-row"><kbd>S</kbd> / <kbd>D</kbd><span>勾选 / 取消导出当前高光</span></div>
+          </div>
+
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">时间线与多轨工具</div>
+            <div class="shortcut-row"><kbd>V</kbd><span>选择 / 拖边修剪工具 (Select)</span></div>
+            <div class="shortcut-row"><kbd>B</kbd><span>剃刀拆分工具 (Razor)</span></div>
+            <div class="shortcut-row"><kbd>N</kbd><span>开关时间线磁吸吸附 (Snap)</span></div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>Z</kbd><span>时间线一键适配全片</span></div>
+            <div class="shortcut-row"><kbd>=</kbd> / <kbd>-</kbd><span>时间线放大 / 缩小（支持小键盘 +/-）</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>\</kbd><span>在播放头位置拆分高光片段</span></div>
+          </div>
+
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">字幕精编与原子撤销</div>
+            <div class="shortcut-row"><kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>\</kbd><span>在播放头位置拆分当前字幕句</span></div>
+            <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>N</kbd><span>在播放头位置插入新字幕行</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>字幕全文查找替换 / 聚焦高光搜索</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Z</kbd><span>撤销上一步（最多 100 步原子栈）</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd><span>重做（或 Ctrl+Y）</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>H</kbd><span>打开操作历史记录面板</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>S</kbd><span>立即保存审片与字幕方案</span></div>
+          </div>
+
+          <div class="shortcut-sec">
+            <div class="shortcut-sec-title">工作区、交付与帮助</div>
+            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>1~4</kbd><span>切换 剪辑 / 审片 / 字幕 / 交付页</span></div>
+            <div class="shortcut-row"><kbd>`</kbd><span>鼠标悬停面板最大化 / 还原</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>E</kbd><span>按当前规格一键导出已选切片</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>,</kbd><span>打开三层 API 与外观设置</span></div>
+            <div class="shortcut-row"><kbd>F1</kbd><span>打开内置新手操作手册</span></div>
+            <div class="shortcut-row"><kbd>?</kbd><span>打开全量快捷键速查表</span></div>
+            <div class="shortcut-row"><kbd>F11</kbd><span>无边框全屏切换</span></div>
+            <div class="shortcut-row"><kbd>Esc</kbd><span>退出影院模式 / 关闭查找栏或弹窗</span></div>
+          </div>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 内置暗房新手操作手册弹窗（F1 或 帮助 -> 新手操作手册） -->
+  <dialog id="manual-dialog" class="manual-dialog" closedby="any" aria-labelledby="manual-dialog-title">
+    <form method="dialog" class="dialog-inner manual-inner">
+      <div class="dialog-header">
+        <div class="toolbar-cluster">
+          <h2 id="manual-dialog-title">Solacut 新手操作手册</h2>
+          <span class="nle-badge mono-num">v0.9.1 Beta · 本地零上传</span>
+        </div>
         <button type="submit" value="cancel" class="nle-icon-btn" aria-label="关闭">
           <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
             <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
           </svg>
         </button>
       </div>
-      <div class="dialog-body scroller">
-        <div class="shortcut-sections">
-          <div class="shortcut-sec">
-            <div class="shortcut-sec-title">播控与梭巡</div>
-            <div class="shortcut-row"><kbd>Space</kbd><span>播放 / 暂停</span></div>
-            <div class="shortcut-row"><kbd>L</kbd><span>正向加速梭巡 (1x→8x)</span></div>
-            <div class="shortcut-row"><kbd>K</kbd><span>急停（配 J/L 慢放）</span></div>
-            <div class="shortcut-row"><kbd>J</kbd><span>反向加速梭巡 (-1x→-8x)</span></div>
-            <div class="shortcut-row"><kbd>←</kbd> / <kbd>→</kbd><span>逐帧后退 / 前进</span></div>
-            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>←/→</kbd><span>步进 ±1 秒（或 , / .）</span></div>
-            <div class="shortcut-row"><kbd>Home</kbd> / <kbd>End</kbd><span>跳至片头 / 片尾</span></div>
-          </div>
+      <div class="manual-layout">
+        <nav class="manual-nav scroller" id="manual-nav" aria-label="手册章节">
+          <button type="button" class="manual-nav-btn active" data-manual-sec="quickstart">01 · 3 分钟快速上手</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="api">02 · 三层 API 与本地 GPU</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="media">03 · 媒体池分类与多音轨</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="multilang">04 · 六语种母语精翻与词库</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="nle">05 · 暗房审片与精剪技巧</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="export">06 · 无损直切 / EDL / 竖屏</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="faq">07 · 常见问题与安全说明</button>
+        </nav>
+        <div class="manual-content scroller" id="manual-content">
+          <article class="manual-section" data-manual-panel="quickstart">
+            <h3>01 · 3 分钟零门槛上手流程</h3>
+            <p>Solacut 将数小时游戏/直播录屏浓缩为 <strong>4 步标准化流水线</strong>：素材整理 → AI 听声辨梗粗筛 → 暗房核验微调 → 一键无损或竖屏成片。</p>
+            <ol class="manual-steps">
+              <li><strong>零配置先玩一遍 Demo</strong>：还没填 API Key？点击下方「一键加载 30 秒示例工程」，无需联网即可完整体验时间线波形、双语字幕修改与无损切片导出。</li>
+              <li><strong>放入你的录屏素材</strong>：点击顶栏 <code>input → output</code> 切换素材目录，或直接把 MP4/MKV/MOV 放进 <code>input/</code> 文件夹并点刷新。</li>
+              <li><strong>先做零费用「体检」，再点「粗筛」</strong>：在媒体池选中视频点 <strong>体检</strong>（零 API 消耗，30 秒输出 S/A/B 场次评级与黄金时段热力图），确认值得剪再点右侧「粗筛 → 粗筛当前视频」。</li>
+              <li><strong>审片与交付</strong>：在「高光」表用 <kbd>↑</kbd>/<kbd>↓</kbd> 逐条核对、<kbd>I</kbd>/<kbd>O</kbd> 微调边界、<kbd>S</kbd> 勾选要保留的片段，切到「交付」页选好模式与语种，按 <kbd>Ctrl+E</kbd> 一键出片。</li>
+            </ol>
+            <div class="manual-callout">
+              <strong>效率贴士：</strong> 顶部工作区预设支持 <kbd>Shift+1</kbd>（剪辑）/ <kbd>Shift+2</kbd>（审片）/ <kbd>Shift+3</kbd>（字幕）/ <kbd>Shift+4</kbd>（交付）秒切布局；鼠标悬停任意面板按 <kbd>`</kbd> 键可瞬间全屏放大该面板！
+            </div>
+          </article>
 
-          <div class="shortcut-sec">
-            <div class="shortcut-sec-title">入出点与片段</div>
-            <div class="shortcut-row"><kbd>I</kbd> / <kbd>O</kbd><span>设当前段入点 / 出点</span></div>
-            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>I/O</kbd><span>跳至当前段入点 / 出点</span></div>
-            <div class="shortcut-row"><kbd>/</kbd><span>从入点重播当前片段</span></div>
-            <div class="shortcut-row"><kbd>↑</kbd> / <kbd>↓</kbd><span>选中上一条 / 下一条高光</span></div>
-            <div class="shortcut-row"><kbd>Enter</kbd><span>播放预览当前选中高光</span></div>
-            <div class="shortcut-row"><kbd>S</kbd><span>勾选 / 取消导出当前段</span></div>
-            <div class="shortcut-row"><kbd>M</kbd><span>开关当前段循环播放</span></div>
-          </div>
+          <article class="manual-section hidden" data-manual-panel="api">
+            <h3>02 · 三层 API 路由与本地 RTX GPU 配置</h3>
+            <p>按 <kbd>Ctrl+,</kbd> 或点右上角齿轮打开「设置与外观」。Solacut 采用极简与发烧友兼顾的<strong>三层接口架构</strong>：</p>
+            <ul class="manual-list">
+              <li><strong>极简单 Key 模式（90% 创作者推荐）</strong>：仅填入 1 个 DeepSeek API Key，即可自动驱动「DeepSeek 云端 ASR + deepseek-flash 高光粗筛 + 六语种双语精修」，无需本地高端显卡。</li>
+              <li><strong>独立三层混搭（公会/发烧友）</strong>：展开「高级三层独立路由」，可分别指定：① 语音识别引擎（DeepSeek 云端 / 本地 RTX faster-whisper / OpenAI 兼容 Groq 等）；② 粗筛模型（看长上下文便宜快）；③ 精修翻译模型（高文采顶级模型专攻字幕意译）。</li>
+              <li><strong>纯本地隐私存储</strong>：所有密钥仅保存在本机 <code>.env</code> 文件中，前端仅展示脱敏掩码（如 <code>sk-a****1234</code>），绝不上传任何第三方中转服务器。</li>
+            </ul>
+          </article>
 
-          <div class="shortcut-sec">
-            <div class="shortcut-sec-title">时间线与字幕</div>
-            <div class="shortcut-row"><kbd>V</kbd> / <kbd>B</kbd><span>选择 Trim / 剃刀工具</span></div>
-            <div class="shortcut-row"><kbd>N</kbd><span>开关时间线磁吸吸附</span></div>
-            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>Z</kbd><span>时间线适配全片</span></div>
-            <div class="shortcut-row"><kbd>=</kbd> / <kbd>-</kbd><span>时间线放大 / 缩小</span></div>
-            <div class="shortcut-row"><kbd>C</kbd><span>在播放头位置拆分字幕</span></div>
-            <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>N</kbd><span>在播放头插入新字幕</span></div>
-            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Z</kbd><span>撤销上一步操作</span></div>
-            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd><span>重做（或 Ctrl+Y）</span></div>
-            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>H</kbd><span>打开操作历史记录面板</span></div>
-            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>S</kbd><span>立即保存审片与字幕</span></div>
-          </div>
+          <article class="manual-section hidden" data-manual-panel="media">
+            <h3>03 · 媒体池文件夹自由分类与 OBS 多音轨</h3>
+            <ul class="manual-list">
+              <li><strong>虚拟文件夹（素材箱 Bin）</strong>：在媒体池空白处<strong>右键 → 新建文件夹</strong>（或点击工具栏新建文件夹图标），可为不同主播、游戏、日期创建带色标的分类文件夹。</li>
+              <li><strong>丝滑拖拽分类</strong>：直接按住素材卡片拖入任意文件夹卡片即完成归类；拖到顶部「未分类」面包屑即可移出。也可以右键素材自由打<strong>5 色达芬奇标签</strong>（爆款/待剪/已审/精品/存档）或批量移动。</li>
+              <li><strong>零破坏安全机制</strong>：文件夹归类是纯虚拟素材箱，<strong>不会移动或修改硬盘上的原始大视频</strong>，删除文件夹只会把素材安全放回「未分类」，绝不删原片。</li>
+              <li><strong>OBS 多音轨自动选人声</strong>：选定 OBS 多轨录屏后，右侧「粗筛 → 音轨」会自动扫描并推荐纯人声麦轨；配合默认开启的 <strong>300~3400Hz 人声带通</strong>，自动滤除游戏低频爆炸与枪炮声误报。</li>
+            </ul>
+          </article>
 
-          <div class="shortcut-sec">
-            <div class="shortcut-sec-title">工作区与窗口</div>
-            <div class="shortcut-row"><kbd>`</kbd><span>悬停面板最大化 / 还原</span></div>
-            <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>1~4</kbd><span>切 剪辑/审片/字幕/交付</span></div>
-            <div class="shortcut-row"><kbd>F11</kbd><span>无边框全屏</span></div>
-            <div class="shortcut-row"><kbd>?</kbd><span>打开快捷键速查</span></div>
-            <div class="shortcut-row"><kbd>Esc</kbd><span>退出最大化 / 关弹窗</span></div>
+          <article class="manual-section hidden" data-manual-panel="multilang">
+            <h3>04 · 六语种母语精翻与专属词库</h3>
+            <p>Solacut 内置 <strong>228,210 条纯商用无限制六语种平行语料</strong>（覆盖 <code>中文 / 英语 / 日语 / 韩语 / 俄语 / 西班牙语</code>），并具备三道零漏翻字幕质检闭环。</p>
+            <ul class="manual-list">
+              <li><strong>自由组合 6 语种</strong>：在「粗筛」页可指定源语种与目标译文语种；若已完成粗筛想改译成其他语种（如英→日、英→韩、中→英出海、日→中烤肉），直接在<strong>「交付」页的「译文语种」下拉框</strong>选择目标语种并点<strong>「切换重翻」</strong>，或点字幕栏顶部的 <code>EN → ZH</code> 语言对胶囊一键重刷！</li>
+              <li><strong>主播黑话与 ASR 纠偏词库</strong>：在检查器「词库」页添加主播口头禅、游戏专名与 Whisper 常听错的词（别名），例如把误听的 <code>Shilley</code> 映射为 <code>Shylily</code>，下一次重翻立即生效。</li>
+              <li><strong>60 万口语研究扩展包</strong>：在「词库」页可按需一键本地扩展至 60 万条全量口语语料索引（仅限个人学习与非商业研究）。</li>
+            </ul>
+          </article>
+
+          <article class="manual-section hidden" data-manual-panel="nle">
+            <h3>05 · 暗房审片、时间线与精剪技巧</h3>
+            <ul class="manual-list">
+              <li><strong>电影级 J/K/L 梭巡</strong>：连按 <kbd>L</kbd> 实现 1x→2x→4x→8x 极速快进审片，连按 <kbd>J</kbd> 倒放，按住 <kbd>K+L</kbd> 或 <kbd>K+J</kbd> 0.5x 慢放精听爆梗起点。</li>
+              <li><strong>秒级改入出点</strong>：播到满意位置按 <kbd>I</kbd> 设入点、<kbd>O</kbd> 设出点；也可以在下方时间线用 <kbd>V</kbd> 工具直接拖拉高亮片段左右边缘，或用 <kbd>Alt+X</kbd> 一键还原初始边界。</li>
+              <li><strong>无心理负担的 100 步原子撤销</strong>：改错标题、删错字幕、拖歪入出点？随时 <kbd>Ctrl+Z</kbd> 撤销、<kbd>Ctrl+Shift+Z</kbd> 重做，或按 <kbd>Ctrl+H</kbd> 打开「历史」面板一键时光倒流到任意步骤。</li>
+              <li><strong>字幕全文查找替换与拆分</strong>：按 <kbd>Ctrl+F</kbd> 跨全部高光一键批量替换错别字（支持撤销）；按 <kbd>C</kbd> 或用剃刀工具 <kbd>B</kbd> 在播放头精准一刀拆两句。</li>
+            </ul>
+          </article>
+
+          <article class="manual-section hidden" data-manual-panel="export">
+            <h3>06 · 无损直切 / EDL 回迁 / 9:16 竖屏成片</h3>
+            <ul class="manual-list">
+              <li><strong>无损原画模式（公会推荐）</strong>：采用 FFmpeg 毫秒级原画直拷，自动补偿长 GOP 关键帧前导偏移对齐外挂 <code>.srt</code>（防字幕抢跑），并同步生成 <strong>DaVinci Resolve CSV 标记表 + CMX 3600 EDL 时间线</strong>；遇到 OBS MKV 不兼容音轨会自动转为「原画直拷 + AAC 192k」。</li>
+              <li><strong>竖屏 9:16 一键成片</strong>：自动生成高斯模糊背景 + 居中完整游戏画面 + 顶部爆款标题条 + 双语分层 ASS 硬字幕（按语种自动匹配零缺字字体），默认优先 RTX NVENC 硬件加速，无 N 卡自动无缝切 CPU x264。</li>
+              <li><strong>4K 原片代切</strong>：可用 480p/720p 代理视频高速审片，最后在「交付 → 原片覆盖」指向 4K 原片路径，一键直切 4K 成品。</li>
+            </ul>
+          </article>
+
+          <article class="manual-section hidden" data-manual-panel="faq">
+            <h3>07 · 常见问题与本地安全说明</h3>
+            <ul class="manual-list">
+              <li><strong>为什么某些 MKV / HEVC 视频在内置监视器里黑屏？</strong>：Windows Edge WebView2 内核对部分封装/编码不提供浏览器级硬解，但 Solacut 底层调用独立 FFmpeg，<strong>不影响音频体检、AI 粗筛与无损/竖屏切片导出</strong>。</li>
+              <li><strong>导出时提示目标文件被占用怎么办？</strong>：关闭正在播放该切片的外部播放器（如 VLC/系统播放器）后重试即可；导出采用临时文件原子替换，失败绝不留半截坏文件或孤儿字幕。</li>
+              <li><strong>安全与隐私隔离</strong>：本地后端仅监听 <code>127.0.0.1</code> 且每次启动自动生成 256-bit 随机令牌防止跨站网页访问；你的视频和 API Key 始终留在自己电脑。</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+      <div class="dialog-footer" style="justify-content:space-between;">
+        <div class="toolbar-cluster">
+          <button type="button" id="btn-manual-load-demo" class="nle-btn-sm">一键加载 30 秒示例</button>
+          <button type="button" id="btn-manual-open-shortcuts" class="nle-btn-sm">查看全量快捷键 (?)</button>
+        </div>
+        <button type="submit" value="cancel" class="nle-btn-sm primary-subtle">我知道了</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 媒体池新建 / 编辑虚拟文件夹（素材箱）弹窗 -->
+  <dialog id="media-bin-dialog" closedby="any" aria-labelledby="media-bin-dialog-title">
+    <form method="dialog" id="media-bin-form" class="dialog-inner" style="width:380px;max-width:92vw;">
+      <div class="dialog-header">
+        <h2 id="media-bin-dialog-title">新建文件夹</h2>
+        <button type="submit" value="cancel" class="nle-icon-btn" aria-label="关闭">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+            <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="nle-field">
+          <label for="media-bin-name-input">文件夹名称（仅虚拟分类，不移动硬盘原视频）</label>
+          <input id="media-bin-name-input" type="text" maxlength="40" placeholder="例如：本周爆款 / Shylily 直播 / 待二创" autocomplete="off">
+        </div>
+        <div class="nle-field" style="margin-top:10px;">
+          <label>文件夹色标</label>
+          <div class="bin-color-picker" id="media-bin-color-picker" role="radiogroup" aria-label="文件夹色标">
+            <button type="button" class="bin-color-dot active" data-bin-color="#4f8ef7" style="--dot:#4f8ef7" title="钛蓝"></button>
+            <button type="button" class="bin-color-dot" data-bin-color="#f59e0b" style="--dot:#f59e0b" title="琥珀"></button>
+            <button type="button" class="bin-color-dot" data-bin-color="#22c55e" style="--dot:#22c55e" title="翠绿"></button>
+            <button type="button" class="bin-color-dot" data-bin-color="#ef4444" style="--dot:#ef4444" title="绯红"></button>
+            <button type="button" class="bin-color-dot" data-bin-color="#a855f7" style="--dot:#a855f7" title="靛紫"></button>
+            <button type="button" class="bin-color-dot" data-bin-color="#71717a" style="--dot:#71717a" title="石墨"></button>
           </div>
         </div>
+      </div>
+      <div class="dialog-footer">
+        <button type="submit" value="cancel" class="nle-btn-sm">取消</button>
+        <button type="button" id="btn-confirm-media-bin" class="nle-btn-sm primary-subtle">确定</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 关于 Solacut 弹窗 -->
+  <dialog id="about-dialog" closedby="any" aria-labelledby="about-dialog-title">
+    <form method="dialog" class="dialog-inner" style="width:430px;max-width:92vw;">
+      <div class="dialog-header">
+        <h2 id="about-dialog-title">关于 Solacut</h2>
+        <button type="submit" value="cancel" class="nle-icon-btn" aria-label="关闭">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+            <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="about-hero">
+          <img src="/static/brand/logo.png" alt="Solacut" width="44" height="44" class="about-logo">
+          <div>
+            <div class="about-title">Solacut <span class="nle-badge mono-num">v0.9.1 Beta</span></div>
+            <div class="about-sub">纯本地 NLE 游戏录屏高光切片与六语种母语精翻工作台</div>
+          </div>
+        </div>
+        <ul class="manual-list" style="margin-top:12px;">
+          <li><strong>开源协议</strong>：MIT License（纯本地免费、零强制联网、零遥测）</li>
+          <li><strong>语料支持</strong>：中 / 英 / 日 / 韩 / 俄 / 西 6 语种自由组合 + 228,210 条商用语料底座</li>
+          <li><strong>安全架构</strong>：127.0.0.1 回环绑定 + 256-bit 会话令牌 + 防跨站/DNS Rebinding 隔离</li>
+          <li><strong>官方网站</strong>：<a href="https://solacut.vercel.app" target="_blank" rel="noopener noreferrer" class="about-link">solacut.vercel.app</a></li>
+          <li><strong>开源仓库</strong>：<a href="https://github.com/Entelina/solacut" target="_blank" rel="noopener noreferrer" class="about-link">github.com/Entelina/solacut</a></li>
+        </ul>
+      </div>
+      <div class="dialog-footer">
+        <button type="submit" value="cancel" class="nle-btn-sm primary-subtle">关闭</button>
       </div>
     </form>
   </dialog>
@@ -1441,7 +1672,7 @@
         </div>
         <div class="nle-field">
           <label for="onboarding-base-url">Base URL</label>
-          <input id="onboarding-base-url" type="text" value="https://api.deepseek.com" spellcheck="false">
+          <input id="onboarding-base-url" type="text" value="https://api.deepseek.com/v1" spellcheck="false">
         </div>
         <div class="nle-field">
           <label for="onboarding-api-key">API Key（仅存本机 .env，不上传任何服务器）</label>

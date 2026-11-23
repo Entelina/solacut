@@ -94,6 +94,7 @@ def _resolve_resource_dir(rel: str) -> Path:
 _WEB_DIR = _resolve_resource_dir("web")
 _DEMO_ASSETS_DIR = _resolve_resource_dir("assets/demo")
 _CONFIG_PATH = _PROJECT_ROOT / ".workbench_config.json"
+_MEDIA_BINS_PATH = _PROJECT_ROOT / ".media_bins.json"
 _ENV_PATH = _PROJECT_ROOT / ".env"
 _CORPUS_ROOT = DEFAULT_CORPUS_ROOT
 
@@ -360,6 +361,12 @@ class UserGlossaryUpdateReq(BaseModel):
     terms: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class MediaBinsUpdateReq(BaseModel):
+    folders: list[dict[str, Any]] = Field(default_factory=list)
+    assignments: dict[str, str] = Field(default_factory=dict)
+    tags: dict[str, str] = Field(default_factory=dict)
+
+
 _SESSION_TOKEN: str = secrets.token_urlsafe(32)
 _SESSION_COOKIE_NAME = "solacut_session"
 _SESSION_HEADER_NAME = "x-solacut-token"
@@ -380,7 +387,7 @@ def _extract_host_and_port(host_header: str) -> tuple[str, int | None]:
 
 
 def _is_same_local_origin(origin_header: str, request_host_header: str) -> bool:
-    """校验 Origin 是否指向本机 loopback 且与当前服务同源，彻底阻断跨站请求伪造（CSRF）。"""
+    """校验 Origin 是否指向本机 loopback 且主机与端口严格同源，彻底阻断跨站/跨端口 CSRF。"""
     try:
         parsed = urlsplit(origin_header.strip())
     except ValueError:
@@ -391,18 +398,43 @@ def _is_same_local_origin(origin_header: str, request_host_header: str) -> bool:
     if origin_host not in _ALLOWED_LOCAL_HOSTS:
         return False
     req_host, req_port = _extract_host_and_port(request_host_header)
-    if req_host and origin_host != req_host and not ({origin_host, req_host} <= {"127.0.0.1", "localhost"}):
+    if not req_host:
         return False
-    if req_port is not None and parsed.port is not None and parsed.port != req_port:
+    if origin_host != req_host and not ({origin_host, req_host} <= {"127.0.0.1", "localhost"}):
+        return False
+    origin_port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+    effective_req_port = req_port if req_port is not None else 80
+    if origin_port != effective_req_port:
         return False
     return True
 
 
-def _reject_unc_path(raw_path: str) -> None:
-    """拒绝 UNC 网络路径（如 `\\\\attacker\\share`），防止触发 SMB NTLM 凭据泄露或远程加载。"""
+def _reject_unc_path(raw_path: str | None) -> None:
+    """拒绝 UNC 网络路径与 NT 设备路径（含混合斜杠 `/\\host\\share`），防止 SMB NTLM 凭据泄露。"""
     cleaned = (raw_path or "").strip()
-    if cleaned.startswith("\\\\") or cleaned.startswith("//"):
-        raise HTTPException(status_code=400, detail="安全限制：不允许访问网络 UNC 路径")
+    if not cleaned:
+        return
+    if "\x00" in cleaned:
+        raise HTTPException(status_code=400, detail="安全限制：路径包含非法空字节")
+    norm = cleaned.replace("/", "\\")
+    if norm.startswith("\\\\") or norm.startswith("\\??\\"):
+        raise HTTPException(status_code=400, detail="安全限制：不允许访问网络 UNC 或设备路径")
+
+
+def _validate_safe_stem(stem: str) -> str:
+    """校验视频 stem 仅允许纯文件名片段，严禁路径分隔符、盘符或 `..` 穿越。"""
+    cleaned = (stem or "").strip()
+    if (
+        not cleaned
+        or cleaned in {".", ".."}
+        or "/" in cleaned
+        or "\\" in cleaned
+        or ":" in cleaned
+        or "\x00" in cleaned
+        or ".." in cleaned
+    ):
+        raise HTTPException(status_code=400, detail="安全限制：非法的视频标识 stem")
+    return cleaned
 
 
 def _validate_highlights_json_path(raw_path: str) -> Path:
@@ -437,17 +469,17 @@ app = FastAPI(
 
 @app.middleware("http")
 async def _security_and_cache_middleware(request: Request, call_next: Any) -> Any:
-    """本地安全守卫：防 DNS Rebinding、防跨站 CSRF、校验每会话随机令牌并注入安全响应头。"""
+    """本地安全守卫：防 DNS Rebinding、防跨站/跨端口 CSRF、校验每会话随机令牌并注入安全响应头。"""
     host_header = request.headers.get("host", "")
     hostname, _ = _extract_host_and_port(host_header)
-    if hostname and hostname not in _ALLOWED_LOCAL_HOSTS:
-        return JSONResponse(status_code=403, content={"detail": "禁止非本机 Host 访问"})
+    if not hostname or hostname not in _ALLOWED_LOCAL_HOSTS:
+        return JSONResponse(status_code=403, content={"detail": "禁止非本机或非法 Host 访问"})
 
     path = request.url.path
     if path.startswith("/api/") and path != "/api/health":
         sec_fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
-        if sec_fetch_site == "cross-site":
-            return JSONResponse(status_code=403, content={"detail": "已拦截跨站请求"})
+        if sec_fetch_site in {"cross-site", "same-site"}:
+            return JSONResponse(status_code=403, content={"detail": "已拦截跨站或跨端口请求"})
 
         origin = (request.headers.get("origin") or "").strip()
         if origin and not _is_same_local_origin(origin, host_header):
@@ -520,6 +552,83 @@ def health_check() -> dict[str, Any]:
 def get_config() -> dict[str, Any]:
     """读取当前工作台目录设置与脱敏后的三层 API 状态。"""
     return _read_workbench_config()
+
+
+def _read_media_bins() -> dict[str, Any]:
+    """读取本地媒体池虚拟文件夹（Bin）与素材颜色标签持久化数据。"""
+    default_data: dict[str, Any] = {"folders": [], "assignments": {}, "tags": {}}
+    if not _MEDIA_BINS_PATH.is_file():
+        return default_data
+    try:
+        raw = json.loads(_MEDIA_BINS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return default_data
+        folders = raw.get("folders") if isinstance(raw.get("folders"), list) else []
+        assignments = raw.get("assignments") if isinstance(raw.get("assignments"), dict) else {}
+        tags = raw.get("tags") if isinstance(raw.get("tags"), dict) else {}
+        return {"folders": folders, "assignments": assignments, "tags": tags}
+    except Exception:
+        return default_data
+
+
+@app.get("/api/media-bins")
+def api_get_media_bins() -> dict[str, Any]:
+    """获取媒体池自定义文件夹与素材自由分类映射。"""
+    return _read_media_bins()
+
+
+@app.put("/api/media-bins")
+def api_save_media_bins(req: MediaBinsUpdateReq) -> dict[str, Any]:
+    """持久化保存媒体池自定义文件夹（Bin）、素材归属与颜色标记（零修改磁盘原视频）。"""
+    clean_folders: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in req.folders[:200]:
+        if not isinstance(item, dict):
+            continue
+        fid = str(item.get("id") or "").strip()[:64]
+        name = str(item.get("name") or "").strip()[:60]
+        color = str(item.get("color") or "#4f8ef7").strip()[:24]
+        if not fid or not name or fid in seen_ids:
+            continue
+        seen_ids.add(fid)
+        clean_folders.append(
+            {
+                "id": fid,
+                "name": name,
+                "color": color,
+                "created_at": float(item.get("created_at") or time.time()),
+            }
+        )
+
+    valid_ids = {f["id"] for f in clean_folders}
+    clean_assignments: dict[str, str] = {}
+    for k, v in req.assignments.items():
+        ks = str(k or "").strip()
+        vs = str(v or "").strip()
+        if ks and vs in valid_ids:
+            clean_assignments[ks] = vs
+
+    valid_tag_colors = {"red", "orange", "green", "blue", "purple"}
+    clean_tags: dict[str, str] = {}
+    for k, v in req.tags.items():
+        ks = str(k or "").strip()
+        vs = str(v or "").strip().lower()
+        if ks and vs in valid_tag_colors:
+            clean_tags[ks] = vs
+
+    payload = {
+        "folders": clean_folders,
+        "assignments": clean_assignments,
+        "tags": clean_tags,
+    }
+    tmp_path = _MEDIA_BINS_PATH.with_name(f".media_bins.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, _MEDIA_BINS_PATH)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+    return {"ok": True, **payload}
 
 
 @app.get("/api/corpus/stats")
@@ -749,6 +858,7 @@ def _run_tk_file_dialog(dialog_cb: Any) -> str | None:
 @app.post("/api/browse-folder")
 def browse_folder(req: FolderReq) -> dict[str, Any]:
     """弹出系统原生文件夹选择框（Windows tkinter），用户取消则返回 null。"""
+    _reject_unc_path(req.initial_dir)
     initial = req.initial_dir or str(_PROJECT_ROOT)
     if not Path(initial).is_dir():
         initial = str(_PROJECT_ROOT)
@@ -769,6 +879,7 @@ def browse_folder(req: FolderReq) -> dict[str, Any]:
 @app.post("/api/browse-file")
 def browse_file(req: BrowseFileReq) -> dict[str, Any]:
     """弹出系统原生文件选择对话框（用于选择 4K 原片覆盖等单文件）。"""
+    _reject_unc_path(req.initial_dir)
     init_dir = req.initial_dir if req.initial_dir and Path(req.initial_dir).is_dir() else str(_PROJECT_ROOT)
     try:
         from tkinter import filedialog
@@ -832,6 +943,8 @@ def list_videos(
     output_dir: str | None = Query(default=None),
 ) -> dict[str, Any]:
     """扫描输入目录的全部视频并统计各自的高光分析进度。"""
+    _reject_unc_path(input_dir)
+    _reject_unc_path(output_dir)
     cfg = _read_workbench_config()
     in_dir = Path(input_dir or cfg["input_dir"])
     out_dir = Path(output_dir or cfg["output_dir"])
@@ -922,14 +1035,16 @@ def get_highlights(
     output_dir: str | None = Query(default=None),
 ) -> dict[str, Any]:
     """读取某个视频的 Step 3 高光审片数据及最新切片产出清单。"""
+    safe_stem = _validate_safe_stem(stem)
+    _reject_unc_path(output_dir)
     cfg = _read_workbench_config()
     out_dir = Path(output_dir or cfg["output_dir"])
-    hl_path = out_dir / f"{stem}_highlights.json"
-    if not hl_path.is_file():
-        raise HTTPException(status_code=404, detail=f"尚未生成 {stem} 的高光粗筛结果")
+    hl_path = out_dir / f"{safe_stem}_highlights.json"
+    if not _is_path_within(hl_path, out_dir) or not hl_path.is_file():
+        raise HTTPException(status_code=404, detail=f"尚未生成 {safe_stem} 的高光粗筛结果")
 
     data = json.loads(hl_path.read_text(encoding="utf-8"))
-    manifest_path = out_dir / f"{stem}_clips" / f"{stem}_clips_manifest.json"
+    manifest_path = out_dir / f"{safe_stem}_clips" / f"{safe_stem}_clips_manifest.json"
     clips_manifest = None
     if manifest_path.is_file():
         try:
@@ -974,11 +1089,13 @@ def get_video_diagnostics(
     output_dir: str | None = Query(default=None),
 ) -> dict[str, Any]:
     """获取指定视频的 Step 1 直播状态评级、分小时热度与智能参数推荐。"""
+    safe_stem = _validate_safe_stem(stem)
+    _reject_unc_path(output_dir)
     cfg = _read_workbench_config()
     out_dir = Path(output_dir or cfg["output_dir"])
-    peaks_path = out_dir / f"{stem}_audio_peaks.json"
-    if not peaks_path.is_file():
-        raise HTTPException(status_code=404, detail=f"尚未生成 {stem} 的音频分析文件")
+    peaks_path = out_dir / f"{safe_stem}_audio_peaks.json"
+    if not _is_path_within(peaks_path, out_dir) or not peaks_path.is_file():
+        raise HTTPException(status_code=404, detail=f"尚未生成 {safe_stem} 的音频分析文件")
 
     peaks_data = json.loads(peaks_path.read_text(encoding="utf-8"))
     diag = get_or_compute_diagnostics(peaks_data)
@@ -1031,10 +1148,14 @@ def api_audio_waveform(
     points: int = Query(default=1200, ge=16, le=4000),
 ) -> dict[str, Any]:
     """返回指定视频区间的高分辨率音频能量波形数组（优先直读 16k WAV，全片总览自动落盘缓存）。"""
+    safe_stem = _validate_safe_stem(stem)
+    _reject_unc_path(output_dir)
     cfg = _read_workbench_config()
     out_dir = Path(output_dir or cfg["output_dir"])
-    wav_path = out_dir / f"{stem}_16k.wav"
-    peaks_path = out_dir / f"{stem}_audio_peaks.json"
+    wav_path = out_dir / f"{safe_stem}_16k.wav"
+    peaks_path = out_dir / f"{safe_stem}_audio_peaks.json"
+    if not _is_path_within(wav_path, out_dir) or not _is_path_within(peaks_path, out_dir):
+        raise HTTPException(status_code=400, detail="安全限制：非法的波形路径")
 
     rms_threshold = 0.0
     if peaks_path.is_file():
@@ -1136,6 +1257,7 @@ def api_video_thumbnail(
     effective_time = time_sec if time_sec is not None else (sec if sec is not None else 10.0)
     effective_width = w if w is not None else (width if width is not None else 320)
 
+    _reject_unc_path(output_dir)
     cfg = _read_workbench_config()
     out_dir = Path(output_dir or cfg["output_dir"])
     cache_dir = out_dir / ".thumb_cache"
@@ -1191,13 +1313,17 @@ def save_highlights(req: HighlightsUpdateReq) -> dict[str, Any]:
     data["highlight_count"] = len(sanitized)
     hl_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # 同步刷新审片 Markdown 清单
-    review_md_path = Path(data.get("review_md_path") or hl_path.with_name(f"{hl_path.stem.removesuffix('_highlights')}_review.md"))
+    # 同步刷新审片 Markdown 清单（强制写回同目录固定文件名，绝不盲信 JSON 内部可篡改路径）
+    review_md_path = hl_path.with_name(f"{hl_path.stem.removesuffix('_highlights')}_review.md")
+    data["review_md_path"] = str(review_md_path.resolve())
     transcript_segments: list[dict[str, Any]] = []
-    tr_path = Path(data.get("transcript_json_path", ""))
-    if tr_path.is_file():
+    tr_raw = str(data.get("transcript_json_path") or "").strip()
+    if tr_raw:
         try:
-            transcript_segments = json.loads(tr_path.read_text(encoding="utf-8")).get("segments", [])
+            _reject_unc_path(tr_raw)
+            tr_path = Path(tr_raw)
+            if tr_path.is_file() and _is_path_within(tr_path, hl_path.parent):
+                transcript_segments = json.loads(tr_path.read_text(encoding="utf-8")).get("segments", [])
         except Exception:
             transcript_segments = []
 
@@ -1237,6 +1363,9 @@ def _resolve_safe_audio_stream(
 @app.post("/api/tasks/analyze")
 def start_analyze_task(req: AnalyzeTaskReq) -> dict[str, Any]:
     """提交单个或批量视频粗筛任务到后台队列（Step 1 -> Step 2 -> Step 3）。"""
+    _reject_unc_path(req.output_dir)
+    for raw_vp in req.video_paths:
+        _reject_unc_path(raw_vp)
     valid_paths = [Path(p) for p in req.video_paths if Path(p).is_file()]
     if not valid_paths:
         raise HTTPException(status_code=400, detail="没有找到有效的视频文件")
@@ -1351,6 +1480,7 @@ def start_export_task(req: ExportTaskReq) -> dict[str, Any]:
         _reject_unc_path(req.video_path)
         if not Path(req.video_path).is_file():
             raise HTTPException(status_code=400, detail=f"指定的原片视频不存在：{req.video_path}")
+    _reject_unc_path(req.output_dir)
 
     try:
         hl_data = json.loads(hl_path.read_text(encoding="utf-8"))
@@ -1390,6 +1520,9 @@ def start_export_task(req: ExportTaskReq) -> dict[str, Any]:
 @app.post("/api/tasks/diagnose")
 def start_diagnose_task(req: DiagnoseTaskReq) -> dict[str, Any]:
     """提交零 API 消耗的仅音频快速体检任务（批量测算直播评级与分小时热度）。"""
+    _reject_unc_path(req.output_dir)
+    for raw_vp in req.video_paths:
+        _reject_unc_path(raw_vp)
     valid_paths = [Path(p) for p in req.video_paths if Path(p).is_file()]
     if not valid_paths:
         raise HTTPException(status_code=400, detail="没有找到有效的视频文件")

@@ -632,6 +632,111 @@ class TestWebAndPipeline(unittest.TestCase):
         self.assertNotIn("ghp_1234567890abcdefghij", redacted)
         self.assertIn("REDACTED", redacted)
 
+    def test_v091_redteam_hardening_media_bins_and_demo_save(self) -> None:
+        """测试 7：验证红队终审全部 P0/P1 安全加固、媒体池虚拟文件夹持久化 API 与 Demo 保存不报 500。"""
+        authed_client = TestClient(web_app.app, headers={"X-Solacut-Token": web_app._SESSION_TOKEN})
+
+        # 1. 红队边缘绕过全部封死：空/畸形 Host、same-site 跨端口、默认端口错配 Origin、混合斜杠 UNC、stem 穿越
+        self.assertEqual(authed_client.get("/api/config", headers={"Host": ""}).status_code, 403)
+        self.assertEqual(authed_client.get("/api/config", headers={"Sec-Fetch-Site": "same-site"}).status_code, 403)
+        self.assertEqual(
+            authed_client.get(
+                "/api/config",
+                headers={"Host": "127.0.0.1:8765", "Origin": "http://localhost"},
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            authed_client.get("/api/videos", params={"input_dir": r"/\attacker.com\share"}).status_code,
+            400,
+        )
+        self.assertEqual(
+            authed_client.get("/api/highlights", params={"stem": "../secret"}).status_code,
+            400,
+        )
+        self.assertEqual(
+            authed_client.get("/api/waveform", params={"stem": r"C:\evil"}).status_code,
+            400,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            outside_target = tmp / "do_not_overwrite.txt"
+            outside_target.write_text("SAFE_ORIGINAL", encoding="utf-8")
+
+            sub_dir = tmp / "work"
+            sub_dir.mkdir()
+            hl_file = sub_dir / "demo_highlights.json"
+            # 故意省略 elapsed_sec 且把 review_md_path 篡改为外部敏感文件，验证既不 500 也不覆写外部文件
+            hl_file.write_text(
+                json.dumps(
+                    {
+                        "video_path": str(sub_dir / "demo.mp4"),
+                        "review_md_path": str(outside_target),
+                        "model": "demo-preset",
+                        "total_duration_sec": 30.0,
+                        "total_duration_str": "00:30",
+                        "highlight_count": 1,
+                        "selection_plan": {"duration_tier": "示例", "target_count": 1, "min_clip_sec": 8, "max_clip_sec": 15},
+                        "highlights": [
+                            {
+                                "rank": 1,
+                                "selected": True,
+                                "start_sec": 2.0,
+                                "end_sec": 10.0,
+                                "score": 9.2,
+                                "title_zh": "测试标题",
+                                "summary_zh": "测试梗概",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(web_app, "_CONFIG_PATH", tmp / "cfg.json"),
+                patch.object(web_app, "_ENV_PATH", tmp / ".env"),
+                patch.object(web_app, "_MEDIA_BINS_PATH", tmp / ".media_bins.json"),
+            ):
+                # 2. Demo 缺失 elapsed_sec 保存必返 200，且被篡改的外部 review_md_path 丝毫不受影响
+                save_res = authed_client.put(
+                    "/api/highlights",
+                    json={
+                        "highlights_json_path": str(hl_file),
+                        "highlights": [
+                            {
+                                "rank": 1,
+                                "selected": True,
+                                "start_sec": 2.5,
+                                "end_sec": 10.5,
+                                "score": 9.2,
+                                "title_zh": "改过的标题",
+                                "summary_zh": "测试梗概",
+                            }
+                        ],
+                    },
+                )
+                self.assertEqual(save_res.status_code, 200)
+                self.assertEqual(outside_target.read_text(encoding="utf-8"), "SAFE_ORIGINAL")
+                self.assertTrue((sub_dir / "demo_review.md").is_file())
+
+                # 3. 媒体池虚拟文件夹 API 读写与非法色标/孤儿引用清洗
+                put_bins = authed_client.put(
+                    "/api/media-bins",
+                    json={
+                        "folders": [{"id": "bin_1", "name": "本周爆款", "color": "#f59e0b"}],
+                        "assignments": {"a.mp4": "bin_1", "b.mp4": "nonexistent_bin"},
+                        "tags": {"a.mp4": "red", "b.mp4": "invalid_color"},
+                    },
+                )
+                self.assertEqual(put_bins.status_code, 200)
+                bins_data = authed_client.get("/api/media-bins").json()
+                self.assertEqual(len(bins_data["folders"]), 1)
+                self.assertEqual(bins_data["assignments"], {"a.mp4": "bin_1"})
+                self.assertEqual(bins_data["tags"], {"a.mp4": "red"})
+
 
 if __name__ == "__main__":
     unittest.main()

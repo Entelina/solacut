@@ -1676,7 +1676,9 @@ def _build_fallback_subtitles_for_highlight(
                     "start_sec": round(float(sub["start_sec"]), 2),
                     "end_sec": round(float(sub["end_sec"]), 2),
                     "text_orig": orig,
-                    "text_zh": orig,
+                    "text_src": orig,
+                    "text_tgt": "",
+                    "text_zh": "",
                     "text_en": orig,
                 }
             )
@@ -1954,19 +1956,20 @@ def export_review_markdown(
     dst_md = Path(md_path)
     dst_md.parent.mkdir(parents=True, exist_ok=True)
 
-    plan = result["selection_plan"]
+    plan = result.get("selection_plan") or {}
     highlights: list[dict[str, Any]] = result.get("highlights", [])
-    video_name = Path(result.get("video_path") or result["transcript_json_path"]).name
+    video_name = Path(result.get("video_path") or result.get("transcript_json_path") or "video").name
+    hl_json_name = Path(result.get("highlights_json_path") or "highlights.json").name
 
     lines: list[str] = [
         f"# 高光切片审片清单：{video_name}",
         "",
         "## 一、基础信息与筛选策略",
         "",
-        f"- **原视频总时长**：`{result['total_duration_str']}`（{result['total_duration_sec']} 秒）",
-        f"- **自适应档位**：{plan['duration_tier']} -> 目标精选 `{plan['target_count']}` 条，单段 `{plan['min_clip_sec']}~{plan['max_clip_sec']}` 秒",
-        f"- **使用模型**：`{result['model']}` | 实际筛选命中：`{result['highlight_count']}` 条 | 耗时：`{result['elapsed_sec']}` 秒",
-        f"- **人工审片指引**：默认全部 `" + '"selected": true' + f"`；如需剔除某段，请打开 `{Path(result['highlights_json_path']).name}` 把对应条目改为 `" + '"selected": false' + "`，下一步 Step 4 将自动跳过。",
+        f"- **原视频总时长**：`{result.get('total_duration_str', '-')}`（{result.get('total_duration_sec', 0.0)} 秒）",
+        f"- **自适应档位**：{plan.get('duration_tier', '自定义')} -> 目标精选 `{plan.get('target_count', len(highlights))}` 条，单段 `{plan.get('min_clip_sec', 15)}~{plan.get('max_clip_sec', 60)}` 秒",
+        f"- **使用模型**：`{result.get('model', 'unknown')}` | 实际筛选命中：`{result.get('highlight_count', len(highlights))}` 条 | 耗时：`{result.get('elapsed_sec', 0.0)}` 秒",
+        f"- **人工审片指引**：默认全部 `" + '"selected": true' + f"`；如需剔除某段，请打开 `{hl_json_name}` 把对应条目改为 `" + '"selected": false' + "`，下一步 Step 4 将自动跳过。",
         "",
         "## 二、高光总览速查表",
         "",
@@ -1981,25 +1984,46 @@ def export_review_markdown(
                 "| :---: | :---: | :--- | :---: | :--- | :--- |",
             ]
         )
-        for item in highlights:
-            safe_title = item["title_zh"].replace("|", "\\|")
-            safe_summary = item["summary_zh"].replace("|", "\\|")
+        for idx, item in enumerate(highlights, start=1):
+            rank = item.get("rank", idx)
+            score = item.get("score", 0.0)
+            s_sec = float(item.get("start_sec", 0.0))
+            e_sec = float(item.get("end_sec", s_sec))
+            dur_s = float(item.get("duration_sec", max(0.0, e_sec - s_sec)))
+            s_str = item.get("start_str") or format_timestamp(s_sec)
+            e_str = item.get("end_str") or format_timestamp(e_sec)
+            title_zh = str(item.get("title_zh") or f"高光 #{rank}")
+            summary_zh = str(item.get("summary_zh") or "")
+            safe_title = title_zh.replace("|", "\\|")
+            safe_summary = summary_zh.replace("|", "\\|")
             lines.append(
-                f"| #{item['rank']} | **{item['score']}** | `{item['start_str']} - {item['end_str']}` | "
-                f"{item['duration_sec']:.1f}s | {safe_title} | {safe_summary} |"
+                f"| #{rank} | **{score}** | `{s_str} - {e_str}` | "
+                f"{dur_s:.1f}s | {safe_title} | {safe_summary} |"
             )
 
         lines.extend(["", "## 三、逐条审片详卡（附原声台词核对）", ""])
-        for item in highlights:
-            tags_str = " / ".join(f"`{t}`" for t in item["tags"]) if item["tags"] else "`无标签`"
+        for idx, item in enumerate(highlights, start=1):
+            rank = item.get("rank", idx)
+            score = item.get("score", 0.0)
+            s_sec = float(item.get("start_sec", 0.0))
+            e_sec = float(item.get("end_sec", s_sec))
+            dur_s = float(item.get("duration_sec", max(0.0, e_sec - s_sec)))
+            s_str = item.get("start_str") or format_timestamp(s_sec)
+            e_str = item.get("end_str") or format_timestamp(e_sec)
+            title_zh = str(item.get("title_zh") or f"高光 #{rank}")
+            title_en = str(item.get("title_en") or "")
+            summary_zh = str(item.get("summary_zh") or "")
+            reason = str(item.get("reason") or "")
+            raw_tags = item.get("tags") or []
+            tags_str = " / ".join(f"`{t}`" for t in raw_tags) if raw_tags else "`无标签`"
             lines.extend(
                 [
-                    f"### #{item['rank']} [{item['score']}分] {item['title_zh']}",
+                    f"### #{rank} [{score}分] {title_zh}",
                     "",
-                    f"- **时间定位**：`{item['start_str']} - {item['end_str']}`（精确秒数：`{item['start_sec']}s ~ {item['end_sec']}s`，时长 `{item['duration_sec']:.1f}s`）",
-                    f"- **英文标题**：{item['title_en'] or '（未生成）'}",
-                    f"- **剧情梗概**：{item['summary_zh']}",
-                    f"- **入选理由**：{item['reason'] or '（未填写）'}",
+                    f"- **时间定位**：`{s_str} - {e_str}`（精确秒数：`{s_sec}s ~ {e_sec}s`，时长 `{dur_s:.1f}s`）",
+                    f"- **英文标题**：{title_en or '（未生成）'}",
+                    f"- **剧情梗概**：{summary_zh}",
+                    f"- **入选理由**：{reason or '（未填写）'}",
                     f"- **标签**：{tags_str}",
                     "- **台词字幕核对**：",
                 ]
@@ -2007,14 +2031,14 @@ def export_review_markdown(
             bilingual_subs = item.get("subtitles") or []
             if bilingual_subs:
                 for q in bilingual_subs:
-                    q_start = format_timestamp(float(q["start_sec"]))
-                    q_end = format_timestamp(float(q["end_sec"]))
-                    zh = str(q.get("text_zh") or "").strip()
-                    en = str(q.get("text_en") or q.get("text_orig") or "").strip()
-                    if zh and en and zh != en:
-                        lines.append(f"  > `[{q_start} - {q_end}]` {zh}  |  *{en}*")
+                    q_start = format_timestamp(float(q.get("start_sec", 0.0)))
+                    q_end = format_timestamp(float(q.get("end_sec", 0.0)))
+                    tgt = str(q.get("text_tgt") or q.get("text_zh") or "").strip()
+                    src = str(q.get("text_src") or q.get("text_en") or q.get("text_orig") or "").strip()
+                    if tgt and src and tgt != src:
+                        lines.append(f"  > `[{q_start} - {q_end}]` {tgt}  |  *{src}*")
                     else:
-                        lines.append(f"  > `[{q_start} - {q_end}]` {zh or en}")
+                        lines.append(f"  > `[{q_start} - {q_end}]` {tgt or src}")
             else:
                 quotes = _collect_quotes_for_highlight(item, transcript_segments)
                 if not quotes:
@@ -2439,9 +2463,11 @@ def enrich_highlights_with_bilingual_subtitles(
     out_md = out_dir / f"{stem}_review.md"
 
     data["highlights"] = enriched
-    data["source_language"] = resolved_src_lang
-    data["target_language"] = resolved_tgt_lang
-    data["subtitle_pair"] = resolved_pair
+    # 仅全量重刷（未限定单条 ranks）或顶层语种为空时更新顶层语种，防止单条试翻污染其余片段语种标识
+    if not target_ranks or not data.get("target_language"):
+        data["source_language"] = resolved_src_lang
+        data["target_language"] = resolved_tgt_lang
+        data["subtitle_pair"] = resolved_pair
     data["polish_model"] = polish_cfg["model"] if llm_caller is None else "mock/custom"
     data["bilingual_subtitles"] = ok_count > 0
     data["translated_ok_count"] = ok_count

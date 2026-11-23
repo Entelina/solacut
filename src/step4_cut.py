@@ -213,7 +213,7 @@ def probe_video_fps(video_path: Path) -> float:
         "stream=r_frame_rate",
         "-of",
         "default=noprint_wrappers=1:nokey=1",
-        str(video_path),
+        str(video_path.resolve()),
     ]
     try:
         proc = run_media_subprocess(cmd, timeout=15)
@@ -246,7 +246,7 @@ def probe_video_duration(video_path: Path) -> float:
         "format=duration",
         "-of",
         "default=noprint_wrappers=1:nokey=1",
-        str(video_path),
+        str(video_path.resolve()),
     ]
     try:
         proc = run_media_subprocess(cmd, timeout=15)
@@ -276,7 +276,7 @@ def probe_video_dimensions(video_path: Path) -> tuple[int, int]:
         "stream=width,height",
         "-of",
         "json",
-        str(video_path),
+        str(video_path.resolve()),
     ]
     try:
         proc = run_media_subprocess(cmd, timeout=15)
@@ -575,8 +575,8 @@ def generate_clip_ass(
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
         "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        # Title：暖亮金黄 (#FDE047 -> BGR &H0047E0FD)，粗体，顶部居中 (Alignment=8)
-        f"Style: Title,Microsoft YaHei,{title_size},&H0047E0FD,&H000000FF,&H00120E0A,&H80000000,"
+        # Title：暖亮金黄 (#FDE047 -> BGR &H0047E0FD)，粗体，顶部居中 (Alignment=8)，按主语种动态匹配零缺字字体
+        f"Style: Title,{primary_font},{title_size},&H0047E0FD,&H000000FF,&H00120E0A,&H80000000,"
         f"-1,0,0,0,100,100,1,0,1,{outline_title},{shadow_sz},8,{title_margin_lr},{title_margin_lr},{title_margin_v},1",
         # ZH（上行主字幕样式）：纯白粗体，黑描边，底部居中 (Alignment=2)
         f"Style: ZH,{primary_font},{zh_size},&H00FFFFFF,&H000000FF,&H00120E0A,&H64000000,"

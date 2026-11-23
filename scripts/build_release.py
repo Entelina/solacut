@@ -2,7 +2,7 @@
 
 严格遵循安全发布铁律：
 1. 物理隔离开发目录：绝不打包 `.env`、`.workbench_config.json`、`input/`、`output/`、`.webview_profile`、`data/corpus/raw_cache/`；
-2. 商用语料合规打包：自动基于 `--commercial-only` 生成纯商用无限制索引包（MIT / CC BY 2.0 / CC BY-SA 4.0，共 228,542 条），
+2. 商用语料合规打包：自动基于 `--commercial-only` 生成纯商用无限制索引包（MIT / CC BY 2.0 / CC BY-SA 4.0，共 228,210 条），
    严禁将 TED2020 (CC BY-NC-ND) 或 OpenSubtitles 随安装包分发；
 3. 自动重置 `user_glossary.json` 为干净空模板，防止开发机隐私词条泄露；
 4. 自动拷入静态 `ffmpeg.exe` 与 `ffprobe.exe` 至便携包 `bin/`，小白零依赖双击即用；
@@ -50,6 +50,7 @@ _FORBIDDEN_FILENAMES: frozenset[str] = frozenset(
     {
         ".env",
         ".workbench_config.json",
+        ".media_bins.json",
         ".desktop_runtime.log",
         ".desktop_crash.log",
         "id_rsa",
@@ -84,8 +85,9 @@ def run_security_audit(release_dir: Path) -> list[str]:
     """对发布目录执行严苛零泄露与合规门禁扫描，返回违规列表（空列表代表 100% 通过）。"""
     violations: list[str] = []
     cur_user = getpass.getuser()
+    workspace_parent = re.escape(str(PROJECT_ROOT.parent)).replace(r"\\", r"[/\\]")
     user_path_re = re.compile(
-        rf"(?:[A-Za-z]:[/\\]Users[/\\]{re.escape(cur_user)}|/Users/{re.escape(cur_user)}|e:[/\\]Personal-AI)",
+        rf"(?:[A-Za-z]:[/\\]Users[/\\]{re.escape(cur_user)}|/Users/{re.escape(cur_user)}|{workspace_parent})",
         re.IGNORECASE,
     )
 
@@ -223,8 +225,8 @@ def stage_portable_assets(release_dir: Path, include_ffmpeg: bool = True) -> Non
                 shutil.rmtree(dst_sub)
             shutil.copytree(src_sub, dst_sub)
 
-    # 3. 合规文档与干净配置模板
-    for doc in ("LICENSE", "SECURITY.md", "THIRD_PARTY_NOTICES.md", "README.md", ".env.example"):
+    # 3. 合规文档、操作手册与干净配置模板
+    for doc in ("LICENSE", "USER_MANUAL.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md", "README.md", ".env.example"):
         p = PROJECT_ROOT / doc
         if p.is_file():
             shutil.copy2(p, release_dir / doc)
@@ -246,6 +248,18 @@ def stage_portable_assets(release_dir: Path, include_ffmpeg: bool = True) -> Non
                 print(f"[内置媒体引擎] 已打入 {exe_path.name} ({exe_path.stat().st_size / 1048576:.1f} MB)")
             except RuntimeError as exc:
                 print(f"[警告] 未找到可内置的 FFmpeg 工具：{exc}", file=sys.stderr)
+        # 随附 GPLv3 许可说明（符合 gyan.dev FFmpeg GPLv3 独立二进制分发合规要求）
+        ffmpeg_notice = (
+            "Bundled FFmpeg / FFprobe binaries (bin/ffmpeg.exe, bin/ffprobe.exe)\n"
+            "====================================================================\n"
+            "Source build: FFmpeg 9.0 full_build by gyan.dev (https://www.gyan.dev/ffmpeg/builds/)\n"
+            "License: GNU General Public License v3.0 (GPLv3)\n"
+            "Official FFmpeg source code: https://ffmpeg.org/download.html\n"
+            "Full GPLv3 license text: https://www.gnu.org/licenses/gpl-3.0.txt\n\n"
+            "Solacut invokes FFmpeg/FFprobe strictly as independent CLI subprocesses.\n"
+            "Solacut's own source code remains licensed under the MIT License (see LICENSE).\n"
+        )
+        (bin_dir / "LICENSE.FFmpeg-GPLv3.txt").write_text(ffmpeg_notice, encoding="utf-8")
 
 
 def build_pyinstaller_onedir(release_dir: Path, icon_path: Path | None = None) -> Path:

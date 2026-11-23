@@ -16,7 +16,7 @@
   <meta property="og:site_name" content="Solacut">
   <meta property="og:url" content="https://solacut.com/">
   <meta property="og:title" content="Solacut — 从冗长录屏中，精准切出高光与母语级字幕">
-  <meta property="og:description" content="原生 Windows 达芬奇级暗房 NLE 切片与六语种 60 万语料母语级精翻工作台。200-3400Hz 纯人声带通、三道零漏翻闭环、无损直切与 CMX 3600 EDL 回迁。">
+  <meta property="og:description" content="原生 Windows 达芬奇级暗房 NLE 切片与六语种 60 万语料母语级精翻工作台。300-3400Hz 纯人声带通、三道零漏翻闭环、无损直切与 CMX 3600 EDL 回迁。">
   <meta property="og:image" content="https://solacut.com/brand/logo-512.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Solacut — 原生 Windows 游戏高光切片与六语种母语级精翻工作台">
@@ -39,7 +39,7 @@
           decoding="async"
         >
         <span class="brand-wordmark" data-site-brand>Solacut</span>
-        <span class="brand-version mono" data-site-version-short>v0.9 Beta</span>
+        <span class="brand-version mono" data-site-version-short>v0.9.1 Beta</span>
       </a>
 
       <nav class="site-nav" aria-label="主导航">
@@ -149,7 +149,7 @@
               <span>WINDOWS NATIVE NLE WORKBENCH</span>
             </span>
             <span class="hero-spec-tag mono">
-              <span data-site-version>v0.9.0-beta</span> · 零上传纯本地
+              <span data-site-version>v0.9.1-beta</span> · 零上传纯本地
             </span>
           </div>
 
@@ -212,7 +212,7 @@
                   <span class="nle-menubar-item">字幕</span>
                   <span class="nle-menubar-item">导出</span>
                 </div>
-                <span class="nle-track-chip" data-nle-track-label>OBS Track 2 · 纯人声 200-3400Hz</span>
+                <span class="nle-track-chip" data-nle-track-label>OBS Track 2 · 纯人声 300-3400Hz</span>
               </div>
 
               <div class="nle-titlebar-right">
@@ -242,7 +242,7 @@
               <div class="nle-sidebar">
                 <div class="nle-pane-bar">
                   <span>HIGHLIGHTS · 4 CLIPS</span>
-                  <span>200-3400Hz</span>
+                  <span>300-3400Hz</span>
                 </div>
                 <ul class="nle-clip-list" role="list" aria-label="高光切片候选列表">
                   <li>
@@ -386,7 +386,7 @@
                 <div class="nle-timeline-legend">
                   <span class="nle-legend-item">
                     <span class="nle-swatch nle-swatch--amber" aria-hidden="true"></span>
-                    <span>高能人声峰值区 (200-3400Hz)</span>
+                    <span>高能人声峰值区 (300-3400Hz)</span>
                   </span>
                   <span class="nle-legend-item">
                     <span class="nle-swatch nle-swatch--accent" aria-hidden="true"></span>
@@ -812,7 +812,7 @@
               <kbd class="kbd-chip">L</kbd>
               <kbd class="kbd-chip">I</kbd>
               <kbd class="kbd-chip">O</kbd>
-              <span class="swiss-spec-pill">50 步撤销栈</span>
+              <span class="swiss-spec-pill">100 步撤销栈</span>
             </div>
           </li>
 
@@ -827,11 +827,11 @@
             </div>
             <h3 class="swiss-cell-title">OBS 多音轨人声带通</h3>
             <p class="swiss-cell-desc">
-              自动调用 FFprobe 枚举 MKV / MP4 全部音轨并智能推荐主播纯人声麦轨；测算高能峰值时以纯 NumPy FFT 执行 200-3400Hz 人声带通滤波，彻底屏蔽游戏低频爆炸与枪炮轰鸣导致的误报切片。
+              自动调用 FFprobe 枚举 MKV / MP4 全部音轨并智能推荐主播纯人声麦轨；测算高能峰值时以纯 NumPy FFT 执行 300-3400Hz 人声带通滤波，彻底屏蔽游戏低频爆炸与枪炮轰鸣导致的误报切片。
             </p>
             <div class="swiss-cell-meta">
               <span class="swiss-spec-pill">FFprobe 多轨探测</span>
-              <span class="swiss-spec-pill">200-3400Hz FFT</span>
+              <span class="swiss-spec-pill">300-3400Hz FFT</span>
             </div>
           </li>
 
@@ -922,7 +922,7 @@
             </div>
             <h3 class="workflow-step-title">多轨探测与带通锁定</h3>
             <p class="workflow-step-desc">
-              选定 MKV / MP4 录屏目录，自动识别 OBS 纯人声麦轨，执行 200-3400Hz 带通滤波定位真实人声爆发区，滤除爆炸声与静音段。
+              选定 MKV / MP4 录屏目录，自动识别 OBS 纯人声麦轨，执行 300-3400Hz 带通滤波定位真实人声爆发区，滤除爆炸声与静音段。
             </p>
             <div class="workflow-step-output">OUT → 16k WAV + peaks.json</div>
           </li>
@@ -984,7 +984,7 @@
           <!-- 左：下载操作与规格交付面板 -->
           <div class="deck-primary">
             <div class="deck-meta-bar">
-              <span class="deck-version-pill" data-site-version>v0.9.0-beta</span>
+              <span class="deck-version-pill" data-site-version>v0.9.1-beta</span>
               <span>发布日期：<span data-site-release-date>2026-11-23</span></span>
               <span>体积：<span data-site-file-size>247.4 MB</span></span>
             </div>
@@ -999,7 +999,7 @@
             <div class="deck-cta-row">
               <a
                 class="btn btn-primary btn-lg"
-                href="https://github.com/Entelina/solacut/releases/download/v0.9.0-beta/Solacut-v0.9.0-beta-win64-portable.zip"
+                href="https://github.com/Entelina/solacut/releases/download/v0.9.1-beta/Solacut-v0.9.1-beta-win64-portable.zip"
                 data-site-download-github
               >
                 <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1010,7 +1010,7 @@
 
               <a
                 class="btn btn-secondary btn-lg"
-                href="https://github.com/Entelina/solacut/releases/tag/v0.9.0-beta"
+                href="https://github.com/Entelina/solacut/releases/tag/v0.9.1-beta"
                 target="_blank"
                 rel="noopener noreferrer"
                 data-site-download-cn
@@ -1096,7 +1096,7 @@
               </div>
 
               <div class="checksum-code-wrap">
-                <code id="sha256-code" class="checksum-code" data-pending>PENDING-RELEASE · 正式便携包封板后自动固化真实 64 位 SHA-256</code>
+                <code id="sha256-code" class="checksum-code">1b3ab1b86275010bb77d9ba8df739b75ee3e75373de381ac5dce7390468e710c</code>
               </div>
 
               <div class="checksum-cmd">
@@ -1104,8 +1104,8 @@
                 <code
                   id="verify-cmd-code"
                   class="checksum-cmd-line"
-                  data-copy-value="Get-FileHash .\Solacut-v0.9.0-beta-win64-portable.zip -Algorithm SHA256"
-                ><span class="nowrap">Get-FileHash</span><span class="nowrap">.\<span data-site-file-name>Solacut-v0.9.0-beta-win64-portable.zip</span></span><span class="nowrap">-Algorithm SHA256</span></code>
+                  data-copy-value="Get-FileHash .\Solacut-v0.9.1-beta-win64-portable.zip -Algorithm SHA256"
+                ><span class="nowrap">Get-FileHash</span><span class="nowrap">.\<span data-site-file-name>Solacut-v0.9.1-beta-win64-portable.zip</span></span><span class="nowrap">-Algorithm SHA256</span></code>
               </div>
             </div>
 
@@ -1153,6 +1153,7 @@
 
       <ul class="footer-links" role="list">
         <li><a class="footer-link" href="https://github.com/Entelina/solacut" target="_blank" rel="noopener noreferrer" data-site-repo>GitHub</a></li>
+        <li><a class="footer-link" href="https://github.com/Entelina/solacut/blob/main/USER_MANUAL.md" target="_blank" rel="noopener noreferrer">操作手册</a></li>
         <li><a class="footer-link" href="https://github.com/Entelina/solacut/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer" data-site-notices>第三方组件与语料署名声明</a></li>
         <li><a class="footer-link" href="https://github.com/Entelina/solacut/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-site-license>MIT 开源协议</a></li>
         <li><a class="footer-link" href="https://github.com/Entelina/solacut/issues" target="_blank" rel="noopener noreferrer" data-site-issues>公测反馈</a></li>
@@ -1163,7 +1164,7 @@
   <!-- 原生暗房信息弹窗 1：公测预发交付与本地运行说明（避免未上线占位链跳 404） -->
   <dialog id="beta-delivery-dialog" class="info-dialog" aria-labelledby="beta-dialog-title">
     <div class="info-dialog-head">
-      <h2 id="beta-dialog-title" class="info-dialog-title">Solacut <span class="mono" data-site-version>v0.9.0-beta</span> 公测便携包交付说明</h2>
+      <h2 id="beta-dialog-title" class="info-dialog-title">Solacut <span class="mono" data-site-version>v0.9.1-beta</span> 公测便携包交付说明</h2>
       <button type="button" class="info-dialog-close" data-dialog-close aria-label="关闭公测交付说明" autofocus>
         <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true">
           <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
@@ -1178,8 +1179,8 @@
         <li>便携包内置：精简 Python 运行时、独立 FFmpeg / FFprobe、原生 Edge WebView2 暗房壳、228,210 条商用无限制六语种 FTS5 语料索引与 30 秒免配置 Demo 工程。</li>
         <li>开发者可在本地直接从源码运行或打包便携发行版：</li>
       </ul>
-      <code class="info-dialog-code">python desktop_app.py  # 启动原生 Edge WebView2 暗房工作台
-Get-FileHash .\Solacut-v0.9.0-beta-win64-portable.zip -Algorithm SHA256</code>
+      <code class="info-dialog-code">python src/desktop_app.py  # 启动原生 Edge WebView2 暗房工作台
+Get-FileHash .\Solacut-v0.9.1-beta-win64-portable.zip -Algorithm SHA256</code>
     </div>
     <div class="info-dialog-foot">
       <button type="button" class="btn btn-primary btn-sm" data-dialog-close>知道了</button>
@@ -1203,7 +1204,7 @@ Get-FileHash .\Solacut-v0.9.0-beta-win64-portable.zip -Algorithm SHA256</code>
       <ul class="info-dialog-list">
         <li><strong>便携包内置商用无限制语料（228,210 条）</strong>：严格筛选自 OPUS Tatoeba (CC BY 2.0 FR)、Microsoft NTREX-128、OPUS QED 与 WikiMatrix (CC BY-SA 4.0) 开放许可来源。</li>
         <li><strong>本地按需扩展口语库（扩展至 600,000 条）</strong>：由用户本机从 OPUS 官方镜像自行拉取（含 TED2020 / OpenSubtitles），仅限个人学习与非商业研究用途。</li>
-        <li><strong>核心音视频与本地推理组件</strong>：FFmpeg / FFprobe（LGPL/GPL 独立进程调用）、faster-whisper（MIT）、Silero VAD（MIT）、pywebview / Edge WebView2（BSD-3-Clause）。</li>
+        <li><strong>核心音视频与本地推理组件</strong>：便携包随附独立预编译 FFmpeg / FFprobe（GPLv3 独立子进程调用，完整许可文本随包附于 <code>bin/LICENSE.FFmpeg-GPLv3.txt</code>）、faster-whisper（MIT）、Silero VAD（MIT）、pywebview / Edge WebView2（BSD-3-Clause）。</li>
       </ul>
     </div>
     <div class="info-dialog-foot">

@@ -9,6 +9,7 @@ __pycache__/
 .env.*
 !.env.example
 .workbench_config.json
+.media_bins.json
 *.log
 *.pem
 *.key
