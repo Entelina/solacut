@@ -1101,6 +1101,55 @@ def api_load_demo_project() -> dict[str, Any]:
         dst_j = out_dir / f"{stem}{suffix}"
         atomic_write_json(dst_j, payload, indent=2)
 
+    # 同步预热内置弹幕文件 -> 本地 SQLite FTS5 库与轻量弹幕热力图 JSON，使体验工程开箱即带音弹双雷达
+    demo_chat = _DEMO_ASSETS_DIR / f"{stem}_chat.json"
+    if demo_chat.is_file():
+        try:
+            parsed_chat = parse_chat_file(demo_chat)
+            peaks_file = out_dir / f"{stem}_audio_peaks.json"
+            demo_audio_peaks: list[dict[str, Any]] = []
+            demo_dur_hint: float | None = 30.0
+            if peaks_file.is_file():
+                pdata = json.loads(peaks_file.read_text(encoding="utf-8"))
+                if isinstance(pdata, dict):
+                    if isinstance(pdata.get("peak_segments"), list):
+                        demo_audio_peaks = pdata["peak_segments"]
+                    dval = float(pdata.get("total_duration_sec") or 0.0)
+                    if math.isfinite(dval) and dval > 0:
+                        demo_dur_hint = dval
+            spikes = analyze_chat_spikes(
+                parsed_chat["messages"],
+                duration_sec=demo_dur_hint,
+                bucket_sec=2.0,
+            )
+            fusion_peaks = (
+                fuse_audio_and_chat_peaks(demo_audio_peaks, spikes["chat_peaks"])
+                if demo_audio_peaks
+                else []
+            )
+            db_path = out_dir / f"{stem}_chat_messages.db"
+            radar_path = out_dir / f"{stem}_chat_radar.json"
+            radar_payload: dict[str, Any] = {
+                "stem": stem,
+                "source_filename": demo_chat.name,
+                "format": parsed_chat["format"],
+                "message_count": parsed_chat["message_count"],
+                "duration_sec": spikes["duration_sec"],
+                "bucket_sec": spikes["bucket_sec"],
+                "total_hype_messages": spikes["total_hype_messages"],
+                "baseline_median": spikes["baseline_median"],
+                "baseline_mad": spikes["baseline_mad"],
+                "messages_db": db_path.name,
+                "buckets": spikes["buckets"],
+                "chat_peaks": spikes["chat_peaks"],
+                "fusion_peaks": fusion_peaks,
+            }
+            with _get_chat_stem_lock(out_dir, stem):
+                save_chat_messages_db(db_path, parsed_chat["messages"])
+                atomic_write_json(radar_path, radar_payload, indent=None)
+        except Exception as exc:
+            logger.warning("预热内置示例弹幕雷达失败（已静默降级）: %s", exc)
+
     return {
         "ok": True,
         "video_path": str(dst_video.resolve()),

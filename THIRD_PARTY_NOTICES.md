@@ -30,4 +30,13 @@
 6. **Solacut 原创六语种游戏/直播专家术语、ASR 误听纠偏与反直译金库** — `MIT`  
    来源：Solacut 原创整理（`data/corpus/*/curated_*.json`）
 
+## 三、内置 30 秒体验示例工程开放素材署名（`assets/demo/`）
+
+1. **SuperTuxKart 2.x GP 实机竞速画面与游戏音效片段**（截取 30 秒 720p 片段用于离线功能演示） — `CC BY 3.0`  
+   - 原作品：*SuperTuxKart 2.x GP with 24% handicap and road tracks (open source Mario Kart-like Linux game)*  
+   - 原作者 / 录制者：**kimden STK** (https://www.youtube.com/@kimdenstk)  
+   - 来源存档：Wikimedia Commons (https://commons.wikimedia.org/wiki/File:SuperTuxKart_2.x_GP_with_24%25_handicap_and_road_tracks_(open_source_Mario_Kart-like_Linux_game).webm)  
+   - 许可协议：Creative Commons Attribution 3.0 Unported (https://creativecommons.org/licenses/by/3.0/)  
+   - 修改说明：截取 `01:05–01:35` 共 30 秒画面降采样至 1280×720@30fps，叠加示例英语解说音轨（双音轨封装）与 MP4 章节标记，用于演示本地波形分析、OBS 章节读取与多语种字幕审校流程。
+
 > 如用户在个人本地点击「扩展 60 万口语库」，软件将直接从 OPUS 官方公开镜像按需拉取 TED2020 (`CC BY-NC-ND 4.0`) 与 OpenSubtitles 影视字幕至用户个人设备本地索引，仅限个人学习与非商业研究用途。完整动态明细见 `data/corpus/SOURCES.md`。

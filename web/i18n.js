@@ -5808,12 +5808,12 @@
       es: "Manual de usuario de Solacut",
     },
     "dlg.manual.badge": {
-      en: "v0.9.2 Beta · 100% Local",
-      zh: "v0.9.2 Beta · 本地零上传",
-      ja: "v0.9.2 Beta · 完全ローカル",
-      ko: "v0.9.2 Beta · 100% 로컬",
-      ru: "v0.9.2 Beta · 100% локально",
-      es: "v0.9.2 Beta · 100% local",
+      en: "v0.9.3 Beta · 100% Local",
+      zh: "v0.9.3 Beta · 本地零上传",
+      ja: "v0.9.3 Beta · 完全ローカル",
+      ko: "v0.9.3 Beta · 100% 로컬",
+      ru: "v0.9.3 Beta · 100% локально",
+      es: "v0.9.3 Beta · 100% local",
     },
     "dlg.manual.navAria": {
       en: "Manual Chapters",

@@ -229,11 +229,17 @@ def stage_portable_assets(release_dir: Path, include_ffmpeg: bool = True) -> Non
                 shutil.rmtree(dst_sub)
             shutil.copytree(src_sub, dst_sub)
 
-    # 3. 合规文档、操作手册与干净配置模板
+    # 3. 合规文档、操作手册、多语言 README 与干净配置模板
     for doc in ("LICENSE", "USER_MANUAL.md", "SECURITY.md", "THIRD_PARTY_NOTICES.md", "README.md", ".env.example"):
         p = PROJECT_ROOT / doc
         if p.is_file():
             shutil.copy2(p, release_dir / doc)
+    src_docs = PROJECT_ROOT / "docs"
+    if src_docs.is_dir():
+        dst_docs = release_dir / "docs"
+        if dst_docs.exists():
+            shutil.rmtree(dst_docs)
+        shutil.copytree(src_docs, dst_docs)
 
     # 4. 干净空工作区目录
     for empty_dir in ("input", "output"):

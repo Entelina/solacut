@@ -17,7 +17,7 @@
   "translated_ok_count": 2,
   "translation_fallback_count": 0,
   "selection_plan": {
-    "duration_tier": "示例片段",
+    "duration_tier": "30s Demo",
     "target_count": 2,
     "min_clip_sec": 8,
     "max_clip_sec": 15
@@ -26,96 +26,104 @@
     {
       "rank": 1,
       "selected": true,
-      "score": 9.4,
-      "start_sec": 3.0,
-      "end_sec": 13.8,
-      "start_str": "00:03",
-      "end_str": "00:14",
-      "duration_sec": 10.8,
-      "title_zh": "《燕云十六声》玩上头被弹幕调侃，主播理直气壮反怼",
-      "title_en": "Hooked on Where Winds Meet & Clapping Back at Chat",
-      "summary_zh": "示例高光 #1：演示习语反直译（sucked me in / God forbid / we're so back）与游戏名精准纠偏。",
-      "reason": "习语反直译与游戏术语纠偏示范片段",
+      "review_status": "reviewed",
+      "review_reasons": [],
+      "score": 9.3,
+      "start_sec": 1.9,
+      "end_sec": 13.38,
+      "start_str": "00:02",
+      "end_str": "00:13",
+      "duration_sec": 11.48,
+      "title_zh": "熬夜肝赛道被刷“菜就多练”，漂移出弯强势回怼弹幕",
+      "title_en": "Midnight Track Grind — Clapping Back at Chat & Drift Recovery",
+      "summary_zh": "已人工审校示范片段（✓ Reviewed）：演示习语反直译（sucked me in / God forbid / skill issue / we are so back）与双音轨纯净人声提取。",
+      "reason": "主播与弹幕高频互动反讽 + 金色火花漂移追分",
       "tags": [
-        "反直译示范",
-        "上头吐槽"
+        "已审示范",
+        "反直译纠偏",
+        "弹幕互怼"
       ],
       "translation_status": "ok",
       "subtitles": [
         {
-          "start_sec": 3.2,
-          "end_sec": 6.4,
-          "text_orig": "Where Winds Meet sucked me in so bad!",
-          "text_src": "Where Winds Meet sucked me in so bad!",
-          "text_tgt": "《燕云十六声》直接让我彻底玩上头了！",
-          "text_en": "Where Winds Meet sucked me in so bad!",
-          "text_zh": "《燕云十六声》直接让我彻底玩上头了！"
+          "start_sec": 2.1,
+          "end_sec": 5.7,
+          "text_orig": "Okay chat, this track sucked me in so bad—I've been grinding since midnight!",
+          "text_src": "Okay chat, this track sucked me in so bad—I've been grinding since midnight!",
+          "text_tgt": "行吧弹幕，这张图直接让我玩上头了——我从半夜一直肝到现在！",
+          "text_en": "Okay chat, this track sucked me in so bad—I've been grinding since midnight!",
+          "text_zh": "行吧弹幕，这张图直接让我玩上头了——我从半夜一直肝到现在！"
         },
         {
-          "start_sec": 6.6,
-          "end_sec": 10.2,
-          "text_orig": "God forbid a girl has hobbies, chat!",
-          "text_src": "God forbid a girl has hobbies, chat!",
-          "text_tgt": "老天爷，合着女生还不兴有点个人爱好了是吧弹幕！",
-          "text_en": "God forbid a girl has hobbies, chat!",
-          "text_zh": "老天爷，合着女生还不兴有点个人爱好了是吧弹幕！"
+          "start_sec": 5.94,
+          "end_sec": 9.04,
+          "text_orig": "Man, let a guy have hobbies! Stop spamming skill issue in the chat!",
+          "text_src": "Man, let a guy have hobbies! Stop spamming skill issue in the chat!",
+          "text_tgt": "老天爷，让人有点个人爱好行不行！别在弹幕刷什么菜就多练了！",
+          "text_en": "Man, let a guy have hobbies! Stop spamming skill issue in the chat!",
+          "text_zh": "老天爷，让人有点个人爱好行不行！别在弹幕刷什么菜就多练了！"
         },
         {
-          "start_sec": 10.4,
-          "end_sec": 13.6,
-          "text_orig": "Wait, hold on, we are actually so back!",
-          "text_src": "Wait, hold on, we are actually so back!",
-          "text_tgt": "等等先别急，咱们这状态彻底回来了！",
-          "text_en": "Wait, hold on, we are actually so back!",
-          "text_zh": "等等先别急，咱们这状态彻底回来了！"
+          "start_sec": 9.28,
+          "end_sec": 13.08,
+          "text_orig": "Wait, hold this drift—climbing out of ninth, we are actually so back!",
+          "text_src": "Wait, hold this drift—climbing out of ninth, we are actually so back!",
+          "text_tgt": "等等，稳住这波漂移——从第九名杀出来了，咱们彻底支棱起来了！",
+          "text_en": "Wait, hold this drift—climbing out of ninth, we are actually so back!",
+          "text_zh": "等等，稳住这波漂移——从第九名杀出来了，咱们彻底支棱起来了！"
         }
       ]
     },
     {
       "rank": 2,
       "selected": true,
-      "score": 9.7,
-      "start_sec": 17.0,
-      "end_sec": 27.8,
+      "review_status": "draft",
+      "review_reasons": [
+        "high_idiom_density"
+      ],
+      "score": 9.8,
+      "start_sec": 16.7,
+      "end_sec": 28.18,
       "start_str": "00:17",
       "end_str": "00:28",
-      "duration_sec": 10.8,
-      "title_zh": "丝血极限弹反秒杀Boss！全场起立高呼艺术品",
-      "title_en": "1 HP Parry Clutch Deletes Boss — Absolute Cinema",
-      "summary_zh": "示例高光 #2：演示动作游戏术语（parry / clutch / deleted）与直播热梗（Let him cook / Absolute cinema）。",
-      "reason": "残血极限反杀高燃时刻",
+      "duration_sec": 11.48,
+      "title_zh": "双氮气极限躲爆炸！20秒从第9名一路杀进前三名场面",
+      "title_en": "Double Nitro Blast Dodge — P9 to Top 3 Clutch!",
+      "summary_zh": "待人工复核初稿示范（Draft · 按 R 键一键通过）：演示高黑话密度提示（pure clutch / Let him cook / absolute cinema / Drop some W's）与弹幕峰值对齐。",
+      "reason": "直道双管蓝氮气 + 弯道极限躲爆炸连超数车杀进前三",
       "tags": [
-        "极限弹反",
-        "神级演出"
+        "按R键审校",
+        "极限超车",
+        "音弹双爆点"
       ],
       "translation_status": "ok",
       "subtitles": [
         {
-          "start_sec": 17.4,
-          "end_sec": 20.8,
-          "text_orig": "One HP clutch! No way I just parried that!",
-          "text_src": "One HP clutch! No way I just parried that!",
-          "text_tgt": "一滴血极限反杀！我刚才居然真把这刀弹反了！？",
-          "text_en": "One HP clutch! No way I just parried that!",
-          "text_zh": "一滴血极限反杀！我刚才居然真把这刀弹反了！？"
+          "start_sec": 16.9,
+          "end_sec": 20.68,
+          "text_orig": "Double nitro on the straight! No way I just dodged that blast, pure clutch!",
+          "text_src": "Double nitro on the straight! No way I just dodged that blast, pure clutch!",
+          "text_tgt": "直道双管氮气全开！刚才那下爆炸我居然极限躲过去了，纯纯神级操作！",
+          "text_en": "Double nitro on the straight! No way I just dodged that blast, pure clutch!",
+          "text_zh": "直道双管氮气全开！刚才那下爆炸我居然极限躲过去了，纯纯神级操作！"
         },
         {
-          "start_sec": 21.0,
-          "end_sec": 24.4,
-          "text_orig": "Let him cook! That boss just got deleted!",
-          "text_src": "Let him cook! That boss just got deleted!",
-          "text_tgt": "别打断让他秀！这Boss血条直接原地蒸发！",
-          "text_en": "Let him cook! That boss just got deleted!",
-          "text_zh": "别打断让他秀！这Boss血条直接原地蒸发！"
+          "start_sec": 20.9,
+          "end_sec": 24.31,
+          "text_orig": "Let him cook, chat! Ninth to top three in twenty seconds!",
+          "text_src": "Let him cook, chat! Ninth to top three in twenty seconds!",
+          "text_tgt": "别打断让我秀，弹幕！二十秒从第九名一路杀进前三！",
+          "text_en": "Let him cook, chat! Ninth to top three in twenty seconds!",
+          "text_zh": "别打断让我秀，弹幕！二十秒从第九名一路杀进前三！"
         },
         {
-          "start_sec": 24.6,
-          "end_sec": 27.6,
-          "text_orig": "Clip that right now, absolute cinema!",
-          "text_src": "Clip that right now, absolute cinema!",
-          "text_tgt": "赶紧给我切片！这简直是神级演出艺术品！",
-          "text_en": "Clip that right now, absolute cinema!",
-          "text_zh": "赶紧给我切片！这简直是神级演出艺术品！"
+          "start_sec": 24.53,
+          "end_sec": 27.88,
+          "text_orig": "Clip that right now, absolute cinema! Drop some W's in the chat!",
+          "text_src": "Clip that right now, absolute cinema! Drop some W's in the chat!",
+          "text_tgt": "赶紧给我切片，简直神级名场面！弹幕把公屏打满 666！",
+          "text_en": "Clip that right now, absolute cinema! Drop some W's in the chat!",
+          "text_zh": "赶紧给我切片，简直神级名场面！弹幕把公屏打满 666！"
         }
       ]
     }
