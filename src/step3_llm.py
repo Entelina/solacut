@@ -28,7 +28,9 @@ import math
 import os
 import re
 import sys
+import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
@@ -48,6 +50,47 @@ from src.corpus_rag import (  # noqa: E402
 from src.llm_client import DEFAULT_LLM_CLIENT, TokenUsageTracker  # noqa: E402
 from src.step1_audio import format_timestamp  # noqa: E402
 from src.step2_asr import split_long_segment_by_words  # noqa: E402
+
+_HIGHLIGHTS_LOCKS_GUARD = threading.Lock()
+_HIGHLIGHTS_PATH_LOCKS: dict[str, threading.Lock] = {}
+
+
+def get_highlights_file_lock(path: Path | str) -> threading.Lock:
+    """获取进程内按规范化路径隔离的高光 JSON 互斥锁（供 step3_llm 与 web_app 共享防并发覆写）。"""
+    key = os.path.normcase(str(Path(path).resolve()))
+    with _HIGHLIGHTS_LOCKS_GUARD:
+        lock = _HIGHLIGHTS_PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _HIGHLIGHTS_PATH_LOCKS[key] = lock
+        return lock
+
+
+def atomic_write_json(
+    path: Path | str,
+    data: Any,
+    *,
+    indent: int | None = 2,
+) -> Path:
+    """使用同目录临时文件 + `allow_nan=False` + `os.replace`（含短退避重试）原子写入 JSON。"""
+    dst = Path(path)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(data, ensure_ascii=False, indent=indent, allow_nan=False)
+    tmp_path = dst.with_name(f".{dst.name}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp_path.write_text(serialized, encoding="utf-8")
+        for attempt in range(3):
+            try:
+                os.replace(tmp_path, dst)
+                break
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.1)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+    return dst.resolve()
 
 
 def compute_adaptive_selection_plan(
@@ -249,16 +292,26 @@ def build_llm_prompts(
     chunk_index: int = 1,
     total_chunks: int = 1,
     source_language: str | None = None,
+    target_language: str | None = None,
 ) -> tuple[str, str]:
-    """构建 Step 3 高光精选与中文审片摘要的系统提示词与用户提示词。"""
+    """构建 Step 3 高光精选与多语种审片摘要的系统提示词与用户提示词。"""
     target_count = plan["target_count"]
     min_sec = plan["min_clip_sec"]
     max_sec = plan["max_clip_sec"]
 
+    # 粗筛阶段自动识别源语种与目标译文语种，同步做轻量 ASR 误听与公会专属词库检索
+    detected_src, resolved_tgt, _ = resolve_subtitle_language_pair(
+        source_language=source_language,
+        target_language=target_language,
+        sample_text=chunk_text,
+    )
+    tgt_name = _LANG_DISPLAY_NAMES.get(resolved_tgt, resolved_tgt.upper())
+    src_name = _LANG_DISPLAY_NAMES.get(detected_src, detected_src.upper())
+
     system_prompt = (
-        "你是一位经验丰富的游戏直播切片主编与双语短视频策划。\n"
+        "你是一位经验丰富的游戏直播切片主编与多语种短视频策划。\n"
         "你的任务是从带精确秒数时间戳和 [HIGH_VOL] 音量峰值标记的直播字幕稿中，"
-        "挑选出真正值得剪成爆款短视频的高光片段，并整理成中文审片清单供专业剪辑师 1 分钟快速审核。\n\n"
+        "挑选出真正值得剪成爆款短视频的高光片段，并整理成结构化审片清单供专业剪辑师 1 分钟快速审核。\n\n"
         "必须严格遵守的筛选原则：\n"
         "1. 真实性：start_sec 和 end_sec 必须严格落在本段提供的字幕时间范围内，严禁编造不存在的时间点。\n"
         "2. 精准修剪入出点：不要机械照抄整个候选窗口的起止边界！请根据实际台词内容，果断裁掉开头上一个话题的残话、\n"
@@ -275,11 +328,9 @@ def build_llm_prompts(
         else "完整待筛高光字幕"
     )
 
-    # 粗筛阶段自动识别源语种并同步做轻量 ASR 误听与公会专属词库检索，防止粗筛标题/梗概被同音误听带偏
-    detected_lang = (source_language or "").strip() or detect_source_language(chunk_text)
     screen_refs = retrieve_translation_references(
         chunk_text,
-        source_language=detected_lang,
+        source_language=detected_src,
         max_terms=8,
         max_idioms=4,
         max_exemplars=0,
@@ -287,9 +338,23 @@ def build_llm_prompts(
     screen_glossary_block = format_rag_reference_block(screen_refs)
     screen_glossary_section = f"\n{screen_glossary_block}\n\n" if screen_glossary_block else "\n"
 
+    tgt_title_hint = (
+        "- title_tgt (string): 适合目标观众的吸睛标题（使用简体中文，12~28 字）\n"
+        "- title_zh (string): 同 title_tgt 的简体中文吸睛标题\n"
+        "- title_en (string): 地道自然的英文短视频标题\n"
+        if resolved_tgt == "zh"
+        else (
+            f"- title_tgt (string): 使用纯正{tgt_name}（{resolved_tgt.upper()}）撰写的短视频爆款标题\n"
+            f"- title_src (string): 使用{src_name}（{detected_src.upper()}）撰写的对应原文标题\n"
+            f"- title_zh (string): 对应中文标题或同 title_tgt（兼容字段）\n"
+            f"- title_en (string): 地道自然的英文短视频标题（若目标语为英语则同 title_tgt）\n"
+        )
+    )
+
     user_prompt = (
         f"请分析以下视频的{part_info}，从中精选最多 {target_count} 个最具传播潜力的高光切片。\n"
         f"- 视频名称：{video_name}\n"
+        f"- 语种方向：{src_name} ({detected_src}) → {tgt_name} ({resolved_tgt})\n"
         f"- 时长档位：{plan['duration_tier']}\n"
         f"- 单段建议时长：{min_sec} ~ {max_sec} 秒\n"
         f"{screen_glossary_section}"
@@ -297,11 +362,10 @@ def build_llm_prompts(
         "- start_sec (float): 切片起始秒数（必须来自字幕真实时间范围）\n"
         "- end_sec (float): 切片结束秒数（必须大于 start_sec）\n"
         "- score (float): 综合爆款推荐分，1.0 ~ 10.0（9 分以上代表极佳节目效果）\n"
-        "- title_zh (string): 适合 B 站 / 抖音的中文吸睛标题（12~28 字）\n"
-        "- title_en (string): 地道自然的英文短视频标题\n"
-        "- summary_zh (string): 给剪辑师看的中文一句话剧情梗概（交代前因、发生什么、爆点在哪，25~65 字）\n"
-        "- reason (string): 中文入选理由（说明情绪、操作或梗点为何值得剪）\n"
-        "- tags (list[string]): 2~4 个简短中文标签（例如 [\"爆笑吐槽\", \"情绪爆炸\"]）\n\n"
+        f"{tgt_title_hint}"
+        "- summary_zh (string): 给剪辑师看的一句话剧情梗概（交代前因、发生什么、爆点在哪，25~65 字）\n"
+        "- reason (string): 入选理由（说明情绪、操作或梗点为何值得剪）\n"
+        "- tags (list[string]): 2~4 个简短标签（例如 [\"爆笑吐槽\", \"情绪爆炸\"]）\n\n"
         "返回 JSON 格式示例：\n"
         "{\n"
         '  "highlights": [\n'
@@ -309,6 +373,8 @@ def build_llm_prompts(
         '      "start_sec": 124.5,\n'
         '      "end_sec": 168.0,\n'
         '      "score": 9.2,\n'
+        '      "title_tgt": "残血极限一穿三！主播破音狂喜拍桌",\n'
+        '      "title_src": "1 HP Triple Kill Clutch! Streamer Loses It",\n'
         '      "title_zh": "残血极限一穿三！主播破音狂喜拍桌",\n'
         '      "title_en": "1 HP Triple Kill Clutch! Streamer Loses It",\n'
         '      "summary_zh": "主播残血被三人围堵原本已经放弃，结果极限反杀完成翻盘，当场兴奋破音大喊。",\n'
@@ -403,22 +469,137 @@ def _normalize_tags(raw_tags: Any) -> list[str]:
     return unique[:6]
 
 
+VALID_REVIEW_STATUSES: tuple[str, ...] = ("draft", "reviewed")
+
+_REVIEW_FLAG_LABELS: dict[str, str] = {
+    "fallback_translation": "触发降级兜底，建议人工精校译文",
+    "high_idiom_density": "命中多条黑话/反直译词库，建议核对语境",
+    "long_clip": "片段时长较长，建议精剪收紧节奏",
+}
+
+
+def normalize_review_status(status: Any, default: str = "draft") -> str:
+    """将高光审校状态规范化为合法值（'draft' 或 'reviewed'），非法值回退 default。"""
+    fallback = default if default in VALID_REVIEW_STATUSES else "draft"
+    cleaned = str(status or "").strip().lower()
+    if cleaned in VALID_REVIEW_STATUSES:
+        return cleaned
+    return fallback
+
+
+def compute_review_flags(
+    highlight: dict[str, Any],
+    raw_lines: list[dict[str, Any]] | None = None,
+    source_language: str | None = None,
+    target_language: str | None = None,
+    long_clip_threshold_sec: float = 90.0,
+) -> list[str]:
+    """为单条高光计算轻量人工复核提醒标签（review_flags）。
+
+    当前支持：
+    - `fallback_translation`: 触发了翻译降级兜底，需人工精校译文；
+    - `high_idiom_density`: 命中了多条黑话/反直译专家词库（或高密度 ASR 误听），建议核对语境；
+    - `long_clip`: 片段时长较长（默认 >= 90 秒），建议人工精剪节奏。
+    """
+    flags: list[str] = []
+
+    def _add(flag: str) -> None:
+        if flag not in flags:
+            flags.append(flag)
+
+    # 1. 降级兜底检测
+    tr_status = str(highlight.get("translation_status") or "").strip().lower()
+    subtitles = highlight.get("subtitles") if isinstance(highlight.get("subtitles"), list) else []
+    if tr_status == "fallback":
+        _add("fallback_translation")
+    elif subtitles:
+        empty_tgt_cnt = sum(
+            1
+            for row in subtitles
+            if isinstance(row, dict)
+            and not str(row.get("text_tgt") or row.get("text_zh") or "").strip()
+        )
+        if empty_tgt_cnt > 0 and (empty_tgt_cnt / len(subtitles)) >= 0.5:
+            _add("fallback_translation")
+
+    # 2. 长切片提示检测
+    dur = _to_float(highlight.get("duration_sec"))
+    if dur is None:
+        s_val = _to_float(highlight.get("start_sec"))
+        e_val = _to_float(highlight.get("end_sec"))
+        if s_val is not None and e_val is not None:
+            dur = max(0.0, e_val - s_val)
+    if dur is not None and dur >= float(long_clip_threshold_sec):
+        _add("long_clip")
+
+    # 3. 高密度黑话/反直译词库检测（纯本地毫秒级检索，异常时安全降级不阻塞主流程）
+    text_parts: list[str] = []
+    if raw_lines:
+        for seg in raw_lines:
+            txt = str(seg.get("text") or "").strip()
+            if txt:
+                text_parts.append(txt)
+    elif subtitles:
+        for row in subtitles:
+            if not isinstance(row, dict):
+                continue
+            txt = str(row.get("text_orig") or row.get("text_src") or row.get("text_en") or row.get("text_zh") or "").strip()
+            if txt:
+                text_parts.append(txt)
+    else:
+        for field in ("title_src", "title_en", "title_zh", "summary_zh"):
+            val = str(highlight.get(field) or "").strip()
+            if val:
+                text_parts.append(val)
+
+    combined_text = " ".join(text_parts).strip()
+    if combined_text:
+        try:
+            src_code, tgt_code, lang_pair = resolve_subtitle_language_pair(
+                source_language=source_language,
+                target_language=target_language,
+                sample_text=combined_text,
+            )
+            direct_builtin = lang_pair in {"en_zh", "zh_en", "ja_zh", "ko_zh", "ru_zh", "es_zh"}
+            refs = retrieve_translation_references(
+                combined_text,
+                source_language=lang_pair if direct_builtin else src_code,
+                max_terms=6,
+                max_idioms=8,
+                max_exemplars=0,
+            )
+            idiom_cnt = len(refs.get("idiom_hits") or [])
+            mishearing_cnt = len(refs.get("mishearing_hits") or [])
+            if idiom_cnt >= 2 or (idiom_cnt >= 1 and mishearing_cnt >= 2):
+                _add("high_idiom_density")
+        except Exception:
+            pass
+
+    return flags
+
+
 def parse_and_validate_highlights(
     raw_items: list[dict[str, Any]],
     total_duration_sec: float,
     target_count: int,
     overlap_ratio_threshold: float = 0.6,
+    source_language: str | None = None,
+    target_language: str | None = None,
 ) -> list[dict[str, Any]]:
-    """校验、清洗大模型输出的候选高光，进行重叠去重并补齐审片字段。
+    """校验、清洗大模型输出的候选高光，进行重叠去重并补齐规范化多语种与审片字段。
 
     处理规则：
     1. 丢弃起止时间缺失、倒挂、或不足 2 秒的无效项；并将时间裁剪到 [0, total_duration_sec]。
     2. 按评分 score 从高到低排序。
     3. 计算候选之间重叠比例，若与已选高分片段重叠 >= overlap_ratio_threshold 则去重跳过。
-    4. 截取前 target_count 条，注入 `rank`（1 起）与 `selected: True`（人工审片默认勾选开关）。
+    4. 截取前 target_count 条，注入 `rank`（1 起）、`selected: True` 以及规范化 `title_tgt` / `title_src`（兼容 `title_zh` / `title_en`）。
     """
     if target_count < 1:
         raise ValueError(f"target_count 必须大于等于 1，当前传入：{target_count}")
+
+    src_code = _normalize_single_lang_code(source_language) or "en"
+    tgt_code = _normalize_single_lang_code(target_language) or ("en" if src_code == "zh" else "zh")
+    is_zh_to_en = src_code == "zh" and tgt_code == "en"
 
     cleaned: list[dict[str, Any]] = []
     for item in raw_items:
@@ -438,22 +619,38 @@ def parse_and_validate_highlights(
         raw_score = _to_float(item.get("score"))
         score = 5.0 if raw_score is None else max(1.0, min(10.0, raw_score))
 
+        raw_title_tgt = str(item.get("title_tgt") or "").strip()
+        raw_title_src = str(item.get("title_src") or "").strip()
         title_zh = str(item.get("title_zh") or item.get("title") or "").strip()
         title_en = str(item.get("title_en") or "").strip()
-        summary_zh = str(item.get("summary_zh") or "").strip()
+        summary_zh = str(item.get("summary_zh") or item.get("summary_tgt") or "").strip()
         reason = str(item.get("reason") or "").strip()
-        if not title_zh and title_en:
-            title_zh = title_en
+
+        if is_zh_to_en:
+            title_tgt = raw_title_tgt or title_en or title_zh
+            title_src = raw_title_src or title_zh or title_en
+        else:
+            title_tgt = raw_title_tgt or title_zh or title_en
+            title_src = raw_title_src or title_en or title_zh
+
+        if not title_tgt:
+            title_tgt = f"高光片段 {format_timestamp(start_sec)}"
         if not title_zh:
-            title_zh = f"高光片段 {format_timestamp(start_sec)}"
+            title_zh = title_src if is_zh_to_en and title_src else title_tgt
+        if not title_en and tgt_code == "en":
+            title_en = title_tgt
+        if not title_src:
+            title_src = title_en or title_zh
         if not summary_zh:
-            summary_zh = reason or title_zh
+            summary_zh = reason or title_tgt
 
         cleaned.append(
             {
                 "start_sec": round(start_sec, 2),
                 "end_sec": round(end_sec, 2),
                 "score": round(score, 1),
+                "title_tgt": title_tgt,
+                "title_src": title_src,
                 "title_zh": title_zh,
                 "title_en": title_en,
                 "summary_zh": summary_zh,
@@ -484,23 +681,31 @@ def parse_and_validate_highlights(
         if not is_duplicate:
             start_rounded = cand["start_sec"]
             end_rounded = cand["end_sec"]
-            deduped.append(
-                {
-                    "rank": len(deduped) + 1,
-                    "selected": True,  # 人工审片开关：不想要某条时改为 false，Step 4 会自动跳过
-                    "start_sec": start_rounded,
-                    "end_sec": end_rounded,
-                    "duration_sec": round(end_rounded - start_rounded, 2),
-                    "start_str": format_timestamp(start_rounded),
-                    "end_str": format_timestamp(end_rounded),
-                    "score": cand["score"],
-                    "title_zh": cand["title_zh"],
-                    "title_en": cand["title_en"],
-                    "summary_zh": cand["summary_zh"],
-                    "reason": cand["reason"],
-                    "tags": cand["tags"],
-                }
+            item_out: dict[str, Any] = {
+                "rank": len(deduped) + 1,
+                "selected": True,  # 人工审片开关：不想要某条时改为 false，Step 4 会自动跳过
+                "review_status": "draft",  # 审校工作流默认 AI 初稿，人工审校确认后标记为 "reviewed"
+                "review_flags": [],
+                "start_sec": start_rounded,
+                "end_sec": end_rounded,
+                "duration_sec": round(end_rounded - start_rounded, 2),
+                "start_str": format_timestamp(start_rounded),
+                "end_str": format_timestamp(end_rounded),
+                "score": cand["score"],
+                "title_tgt": cand["title_tgt"],
+                "title_src": cand["title_src"],
+                "title_zh": cand["title_zh"],
+                "title_en": cand["title_en"],
+                "summary_zh": cand["summary_zh"],
+                "reason": cand["reason"],
+                "tags": cand["tags"],
+            }
+            item_out["review_flags"] = compute_review_flags(
+                item_out,
+                source_language=src_code,
+                target_language=tgt_code,
             )
+            deduped.append(item_out)
             if len(deduped) >= target_count:
                 break
 
@@ -660,14 +865,14 @@ def resolve_subtitle_language_pair(
     target_language: str | None = None,
     sample_text: str = "",
 ) -> tuple[str, str, str]:
-    """解析源语种、目标译文语种与组合标识，例如 ('ja', 'zh', 'ja_zh') 或 ('zh', 'en', 'zh_en')。"""
+    """解析源语种、目标译文语种与组合标识（支持全部 6×6 跨语种及显式同语种单语精修）。"""
     src_code = _normalize_single_lang_code(source_language)
     if not src_code:
         src_code = detect_source_language(sample_text) if sample_text else "en"
-    tgt_code = _normalize_single_lang_code(target_language)
-    if not tgt_code:
-        tgt_code = "en" if src_code == "zh" else "zh"
-    if tgt_code == src_code:
+    explicit_tgt = _normalize_single_lang_code(target_language)
+    if explicit_tgt:
+        tgt_code = explicit_tgt
+    else:
         tgt_code = "en" if src_code == "zh" else "zh"
     return src_code, tgt_code, f"{src_code}_{tgt_code}"
 
@@ -721,6 +926,12 @@ def _build_lang_specific_style_guide(lang_pair: str, src_code: str = "en", tgt_c
         return guides[lang_pair]
     src_name = _LANG_DISPLAY_NAMES.get(src_code, src_code.upper())
     tgt_name = _LANG_DISPLAY_NAMES.get(tgt_code, tgt_code.upper())
+    if src_code == tgt_code:
+        return (
+            f"   - 【同语种 {src_name} 商业精修准则】：无需翻译为其他语种！"
+            f"专注清理口吃结巴、修正 ASR 同音误听、重组自然意群并优化{src_name}口语节奏与标点，"
+            "确保每一条精修字幕简练精准、贴合主播语气。"
+        )
     return (
         f"   - 【跨语种 {src_name} → {tgt_name} 母语字幕组准则】：彻底抛弃逐词机翻腔，"
         f"精准传达游戏/直播场景的情绪张力、电竞术语与母语级口语节奏，译文必须完全采用自然流畅的{tgt_name}表达，绝不可残留未译源语言！"
@@ -748,29 +959,37 @@ def _build_bilingual_prompts(
     )
     src_name = _LANG_DISPLAY_NAMES.get(src_code, src_code.upper())
     tgt_name = _LANG_DISPLAY_NAMES.get(tgt_code, tgt_code.upper())
+    is_same_lang = src_code == tgt_code
     is_zh_to_en = src_code == "zh" and tgt_code == "en"
     lang_style_guide = _build_lang_specific_style_guide(lang_pair, src_code=src_code, tgt_code=tgt_code)
     clean_hotwords = (hotwords or "").strip()
     clean_context = (extra_context or "").strip()
     clean_feedback = (quality_feedback or "").strip()
 
-    if is_zh_to_en:
+    if is_same_lang:
         field_rule = (
-            "   - text_zh 填写去口吃、修正错别字后的中文原台词；text_en 填写地道母语级英文译文。\n"
-            "   - 【零漏翻铁律（中→英）】：每一条字幕的 text_en 都必须翻译为地道母语英语，严禁留空、严禁残留中文汉字；\n"
+            f"   - 【同语种精修模式（{src_name} 单语润色）】：只需保留单语精修结果，"
+            f"将去口吃、修正错别字与意群重组后的纯正{src_name}字幕同时填入 text_tgt 与 text_src"
+            "（并同步填入 text_zh / text_en 兼容字段），绝不要翻译成其他语言或重复拼接两遍！\n"
+            "   - 必须完整覆盖原始台词从开头到结尾的每一句有效对话，绝不允许跳过或留空！"
+        )
+    elif is_zh_to_en:
+        field_rule = (
+            "   - text_zh / text_src 填写去口吃、修正错别字后的中文原台词；text_en / text_tgt 填写地道母语级英文译文。\n"
+            "   - 【零漏翻铁律（中→英）】：每一条字幕的英文译文（text_en / text_tgt）都必须翻译为地道母语英语，严禁留空、严禁残留中文汉字；\n"
             "     同时必须完整覆盖原始台词从开头到结尾的每一句有效对话，绝不允许跳过或漏译！"
         )
     elif tgt_code == "zh":
         field_rule = (
-            f"   - text_en 填写去口吃并校对后的{src_name}原文（供双语对照）；text_zh 填写纯正简体中文译文。\n"
-            "   - 【零漏翻铁律（外→中）】：每一条字幕的 text_zh 都必须翻译为纯正简体中文，严禁留空、严禁直接照抄外语原文、"
-            "严禁在 text_zh 中残留日文假名/韩文谚文/西里尔字母或整句未译英西语！\n"
+            f"   - text_en / text_src 填写去口吃并校对后的{src_name}原文（供双语对照）；text_zh / text_tgt 填写纯正简体中文译文。\n"
+            "   - 【零漏翻铁律（外→中）】：每一条字幕的 text_zh / text_tgt 都必须翻译为纯正简体中文，严禁留空、严禁直接照抄外语原文、"
+            "严禁在译文中残留日文假名/韩文谚文/西里尔字母或整句未译英西语！\n"
             "     同时必须完整覆盖原始台词从开头到结尾的每一句有效对话（只能清理纯口吃杂音），绝不允许漏翻任何一句！"
         )
     else:
         field_rule = (
-            f"   - 跨语种搭配（{src_name} → {tgt_name}）：text_zh 固定作为【主译文行】填写纯正地道的{tgt_name}译文；"
-            f"text_en 固定作为【副原文行】填写整理校对后的{src_name}原文（也可同步给出 text_tgt 与 text_src）。\n"
+            f"   - 跨语种搭配（{src_name} → {tgt_name}）：text_tgt（同时兼容填入 text_zh）作为【主译文行】填写纯正地道的{tgt_name}译文；"
+            f"text_src（同时兼容填入 text_en）作为【副原文行】填写整理校对后的{src_name}原文。\n"
             f"   - 【零漏翻铁律】：每一条字幕的主译文行都必须完整翻译为纯正{tgt_name}，严禁留空或残留未译{src_name}，并覆盖全段有效对话！"
         )
 
@@ -930,6 +1149,7 @@ def _is_subtitle_untranslated(
             sample_text=text_orig,
         )
 
+    is_same_lang = src_code == tgt_code
     is_zh_to_en = src_code == "zh" and tgt_code == "en"
     # 解析当前待检验的译文文本（target）与源语言文本（source）
     if text_tgt_raw:
@@ -942,6 +1162,10 @@ def _is_subtitle_untranslated(
         tgt_text = text_zh
         src_text = text_en or text_orig
 
+    # 0. 同语种精修模式（如 en->en / zh->zh / ja->ja）：只要精修文本非空即视为有效，绝不误判漏翻
+    if is_same_lang:
+        return not bool(tgt_text or src_text)
+
     # 1. 目标语为英语（en）
     if tgt_code == "en":
         if src_code == "zh" and len(_CJK_RE.findall(src_text)) < 2:
@@ -952,30 +1176,51 @@ def _is_subtitle_untranslated(
             return True
         if not _EN_ASCII_WORD_RE.search(tgt_text):
             return True
+        if src_code == "es":
+            substantive_src = [w for w in _LATIN_WORD_RE.findall(src_text) if w.lower() not in _SKIP_SHORT_INTERJECTION_WORDS]
+            if len(substantive_src) >= 3 and tgt_text.lower() == src_text.lower():
+                return True
         return False
 
     # 2. 目标语为日语（ja）
     if tgt_code == "ja":
         if not tgt_text:
             return True
+        if _KR_HANGUL_RE.search(tgt_text) or _CYRILLIC_RE.search(tgt_text):
+            return True
         if len(src_text) >= 6 and tgt_text.lower() == src_text.lower():
             return True
         if src_code in {"en", "es", "ru"} and not (_JP_KANA_RE.search(tgt_text) or _CJK_RE.search(tgt_text)):
-            return True
-        if src_code == "zh" and not _JP_KANA_RE.search(tgt_text) and len(_CJK_RE.findall(src_text)) >= 4:
+            # 放行极短通用感叹（如 "GG!", "OK"）
+            substantive = [w for w in _LATIN_WORD_RE.findall(src_text) if w.lower() not in _SKIP_SHORT_INTERJECTION_WORDS]
+            if len(substantive) >= 1:
+                return True
+        if src_code == "zh" and not _JP_KANA_RE.search(tgt_text) and len(_CJK_RE.findall(src_text)) >= 6 and tgt_text == src_text:
             return True
         return False
 
     # 3. 目标语为韩语（ko）
     if tgt_code == "ko":
-        if not tgt_text or not _KR_HANGUL_RE.search(tgt_text):
+        if not tgt_text:
             return True
+        if _JP_KANA_RE.search(tgt_text) or _CYRILLIC_RE.search(tgt_text):
+            return True
+        if not _KR_HANGUL_RE.search(tgt_text):
+            substantive = [w for w in _LATIN_WORD_RE.findall(src_text) if w.lower() not in _SKIP_SHORT_INTERJECTION_WORDS]
+            if substantive or _CJK_RE.search(src_text) or _JP_KANA_RE.search(src_text) or _CYRILLIC_RE.search(src_text):
+                return True
         return False
 
     # 4. 目标语为俄语（ru）
     if tgt_code == "ru":
-        if not tgt_text or not _CYRILLIC_RE.search(tgt_text):
+        if not tgt_text:
             return True
+        if _CJK_RE.search(tgt_text) or _JP_KANA_RE.search(tgt_text) or _KR_HANGUL_RE.search(tgt_text):
+            return True
+        if not _CYRILLIC_RE.search(tgt_text):
+            substantive = [w for w in _LATIN_WORD_RE.findall(src_text) if w.lower() not in _SKIP_SHORT_INTERJECTION_WORDS]
+            if substantive or _CJK_RE.search(src_text) or _JP_KANA_RE.search(src_text) or _KR_HANGUL_RE.search(src_text):
+                return True
         return False
 
     # 5. 目标语为西班牙语（es）
@@ -984,7 +1229,8 @@ def _is_subtitle_untranslated(
             return True
         if _CJK_RE.search(tgt_text) or _JP_KANA_RE.search(tgt_text) or _KR_HANGUL_RE.search(tgt_text) or _CYRILLIC_RE.search(tgt_text):
             return True
-        if len(src_text) >= 6 and tgt_text.lower() == src_text.lower():
+        substantive_src = [w for w in _LATIN_WORD_RE.findall(src_text) if w.lower() not in _SKIP_SHORT_INTERJECTION_WORDS]
+        if len(substantive_src) >= 3 and len(src_text) >= 10 and tgt_text.lower() == src_text.lower():
             return True
         return False
 
@@ -1155,6 +1401,7 @@ def _repair_missing_subtitles(
         target_language=target_language,
         sample_text=raw_combined,
     )
+    is_same_lang = src_code == tgt_code
     is_zh_to_en = src_code == "zh" and tgt_code == "en"
     src_name = _LANG_DISPLAY_NAMES.get(src_code, src_code.upper())
     tgt_name = _LANG_DISPLAY_NAMES.get(tgt_code, tgt_code.upper())
@@ -1222,12 +1469,14 @@ def _repair_missing_subtitles(
     rag_block = format_rag_reference_block(rag_refs)
     style_guide = _build_lang_specific_style_guide(lang_pair, src_code=src_code, tgt_code=tgt_code)
 
-    if is_zh_to_en:
+    if is_same_lang:
+        repair_field_hint = f"每一条只需对{src_name}原句做去口吃纠错精修，同时填入 text_tgt / text_src（兼容 text_zh / text_en）。\n"
+    elif is_zh_to_en:
         repair_field_hint = "每一条必须提供地道母语英文 text_en（严禁含汉字）与校对后中文 text_zh。\n"
     elif tgt_code == "zh":
         repair_field_hint = f"每一条必须提供纯正简体中文 text_zh（严禁留白、严禁残留{src_name}原文）与整理后的{src_name}原文 text_en。\n"
     else:
-        repair_field_hint = f"每一条必须将纯正{tgt_name}译文填入 text_zh，整理后的{src_name}原文填入 text_en（严禁残留未译源语）。\n"
+        repair_field_hint = f"每一条必须将纯正{tgt_name}译文填入 text_tgt（兼容 text_zh），整理后的{src_name}原文填入 text_src（兼容 text_en），严禁残留未译源语。\n"
 
     sys_prompt = (
         "你是顶级游戏切片双语字幕组的质检补漏专家。此前整段翻译遗漏了以下少量台词（未翻译或时间轴跳过），\n"
@@ -1283,16 +1532,24 @@ def _repair_missing_subtitles(
         rep = repair_by_id.get(t["id"])
         if not rep:
             continue
-        new_zh = re.sub(r"\s{2,}", " ", str(rep.get("text_zh") or rep.get("text_tgt") or "").strip())
-        new_en = re.sub(r"\s{2,}", " ", str(rep.get("text_en") or rep.get("text_src") or "").strip())
-        if is_zh_to_en:
-            final_zh = new_zh or t["src_text"]
-            final_en = new_en
+        raw_tgt = re.sub(r"\s{2,}", " ", str(rep.get("text_tgt") or "").strip())
+        raw_src = re.sub(r"\s{2,}", " ", str(rep.get("text_src") or "").strip())
+        new_zh = re.sub(r"\s{2,}", " ", str(rep.get("text_zh") or "").strip())
+        new_en = re.sub(r"\s{2,}", " ", str(rep.get("text_en") or "").strip())
+        if is_same_lang:
+            polished = raw_tgt or raw_src or new_zh or new_en or t["src_text"]
+            final_src = polished
+            final_tgt = polished
+            final_zh = polished
+            final_en = polished
+        elif is_zh_to_en:
+            final_zh = raw_src or new_zh or t["src_text"]
+            final_en = raw_tgt or new_en
             final_src = final_zh
             final_tgt = final_en
         else:
-            final_en = new_en or t["src_text"]
-            final_zh = new_zh
+            final_en = raw_src or new_en or t["src_text"]
+            final_zh = raw_tgt or new_zh
             final_src = final_en
             final_tgt = final_zh
 
@@ -1477,18 +1734,28 @@ def _detect_subtitle_quality_issue(
             "请务必完整覆盖原始时间轴内的所有有效对话，绝不可跳过漏翻！"
         )
 
-    # 3. 拦截 1:1 机械逐行直译与口吃残句
+    # 3. 拦截 1:1 机械逐行直译与口吃残句（仅按实际译文行长度与语种特征检测，不误杀非中文目标语）
     if len(raw_lines) >= 10:
         lazy_ratio = len(validated) / max(1, len(raw_lines))
+        short_len_cap = 6 if tgt_code in {"zh", "ja", "ko"} else 14
         short_fragments = sum(
             1
             for row in validated
             if (float(row["end_sec"]) - float(row["start_sec"])) < 1.05
-            and len(str(row.get("text_zh") or "").strip()) <= 6
-            and not any(ch in str(row.get("text_zh") or "") for ch in ("！", "？", "!", "?"))
+            and len(str(row.get("text_tgt") or row.get("text_zh") or "").strip()) <= short_len_cap
+            and not any(
+                ch in str(row.get("text_tgt") or row.get("text_zh") or "")
+                for ch in ("！", "？", "!", "?")
+            )
         )
-        stutter_hits = sum(
-            1 for row in validated if _LAZY_ZH_FRAGMENT_RE.search(str(row.get("text_zh") or ""))
+        stutter_hits = (
+            sum(
+                1
+                for row in validated
+                if _LAZY_ZH_FRAGMENT_RE.search(str(row.get("text_tgt") or row.get("text_zh") or ""))
+            )
+            if tgt_code == "zh"
+            else 0
         )
         if lazy_ratio >= 0.90 and (short_fragments >= 2 or stutter_hits >= 2):
             return (
@@ -1511,6 +1778,15 @@ def _validate_resegmented_subtitles(
     if not isinstance(raw_subs, list) or not raw_subs:
         return None
 
+    raw_combined = " ".join(str(seg.get("text", "")) for seg in raw_lines)
+    src_code, tgt_code, _ = resolve_subtitle_language_pair(
+        source_language=source_language,
+        target_language=target_language,
+        sample_text=raw_combined,
+    )
+    is_same_lang = src_code == tgt_code
+    is_zh_to_en = src_code == "zh" and tgt_code == "en"
+
     parsed: list[dict[str, Any]] = []
     for row in raw_subs:
         if not isinstance(row, dict):
@@ -1525,8 +1801,20 @@ def _validate_resegmented_subtitles(
         if e_clipped <= s_clipped:
             continue
 
-        text_zh = re.sub(r"\s{2,}", " ", str(row.get("text_zh") or "").strip())
-        text_en = re.sub(r"\s{2,}", " ", str(row.get("text_en") or "").strip())
+        raw_tgt = re.sub(r"\s{2,}", " ", str(row.get("text_tgt") or "").strip())
+        raw_src = re.sub(r"\s{2,}", " ", str(row.get("text_src") or "").strip())
+        raw_zh = re.sub(r"\s{2,}", " ", str(row.get("text_zh") or "").strip())
+        raw_en = re.sub(r"\s{2,}", " ", str(row.get("text_en") or "").strip())
+        if is_same_lang:
+            unified = raw_tgt or raw_src or raw_zh or raw_en
+            text_zh = unified
+            text_en = unified
+        elif is_zh_to_en:
+            text_zh = raw_src or raw_zh
+            text_en = raw_tgt or raw_en
+        else:
+            text_zh = raw_tgt or raw_zh
+            text_en = raw_src or raw_en
         if not text_zh and not text_en:
             continue
 
@@ -1616,20 +1904,19 @@ def _validate_resegmented_subtitles(
             return None
 
     # 4. 组装标准输出字典并补全 text_orig / text_src / text_tgt（100% 兼容历史 text_zh / text_en）
-    raw_combined = " ".join(str(seg.get("text", "")) for seg in raw_lines)
-    src_code, tgt_code, _ = resolve_subtitle_language_pair(
-        source_language=source_language,
-        target_language=target_language,
-        sample_text=raw_combined,
-    )
-    is_zh_to_en = src_code == "zh" and tgt_code == "en"
     output: list[dict[str, Any]] = []
     for item in final_cleaned:
         orig_snippet = _match_orig_text_for_span(item["start_sec"], item["end_sec"], raw_lines)
         tr_zh = item["text_zh"]
         tr_en = item["text_en"]
 
-        if is_zh_to_en:
+        if is_same_lang:
+            polished = tr_zh or tr_en or orig_snippet
+            final_src = polished
+            final_tgt = polished
+            final_zh = polished
+            final_en = polished
+        elif is_zh_to_en:
             final_zh = tr_zh or orig_snippet or tr_en
             final_en = tr_en
             final_src = final_zh
@@ -1759,6 +2046,7 @@ def translate_and_polish_highlight_subtitles(
     hotwords: str = "",
     extra_context: str = "",
     concurrency: int = 4,
+    reset_reviewed: bool = True,
 ) -> list[dict[str, Any]]:
     """为每条高光独立并发执行商业级「整句意群重组 + 去口吃清洗 + 听写纠错 + 本土化意译 + 质检打回重写」。"""
     if not highlights:
@@ -1915,19 +2203,52 @@ def translate_and_polish_highlight_subtitles(
                         file=sys.stderr,
                     )
 
-    # 3. 写回每条高光的 `subtitles` 与显式 `translation_status` 字段
+    # 3. 写回每条高光的 `subtitles`、`translation_status`、`review_status` 与 `review_flags` 字段
     updated_highlights: list[dict[str, Any]] = []
     for idx_in_list, (item, raw_lines) in enumerate(prepared):
         item_copy = dict(item)
         if not raw_lines:
             item_copy["subtitles"] = []
             item_copy["translation_status"] = "empty"
+            item_copy["review_status"] = (
+                "draft"
+                if reset_reviewed
+                else normalize_review_status(item_copy.get("review_status"), default="draft")
+            )
+            item_copy["review_flags"] = compute_review_flags(
+                item_copy,
+                raw_lines=raw_lines,
+                source_language=source_language,
+                target_language=target_language,
+            )
             updated_highlights.append(item_copy)
             continue
 
         validated = validated_by_idx.get(idx_in_list)
         if validated is None:
             rank_disp = item.get("rank", idx_in_list + 1)
+            prev_status = str(item.get("translation_status") or "").strip().lower()
+            prev_subs = item.get("subtitles")
+            if prev_status == "ok" and isinstance(prev_subs, list) and len(prev_subs) > 0:
+                # 原片段已有合格译文：重翻失败时保住原有译文与审校状态，绝不降级覆毁
+                print(
+                    f"[警告] 片段 #{rank_disp} 本次重翻失败或未通过校验，已保留原有合格双语字幕不覆毁。",
+                    file=sys.stderr,
+                )
+                item_copy["subtitles"] = list(prev_subs)
+                item_copy["translation_status"] = "ok"
+                item_copy["review_status"] = normalize_review_status(
+                    item_copy.get("review_status"), default="draft"
+                )
+                item_copy["review_flags"] = compute_review_flags(
+                    item_copy,
+                    raw_lines=raw_lines,
+                    source_language=source_language,
+                    target_language=target_language,
+                )
+                updated_highlights.append(item_copy)
+                continue
+
             print(
                 f"[警告] 片段 #{rank_disp} 双语意群重组未通过校验或调用失败，已自动保留原台词短句兜底。",
                 file=sys.stderr,
@@ -1942,6 +2263,18 @@ def translate_and_polish_highlight_subtitles(
             item_copy["subtitles"] = validated
             item_copy["translation_status"] = "ok"
 
+        # 刚生成或重翻的译文默认回置为 "draft" 提醒人工复核；若显式要求保留原状态则归一化透传
+        item_copy["review_status"] = (
+            "draft"
+            if reset_reviewed
+            else normalize_review_status(item_copy.get("review_status"), default="draft")
+        )
+        item_copy["review_flags"] = compute_review_flags(
+            item_copy,
+            raw_lines=raw_lines,
+            source_language=source_language,
+            target_language=target_language,
+        )
         updated_highlights.append(item_copy)
 
     return updated_highlights
@@ -1960,6 +2293,10 @@ def export_review_markdown(
     highlights: list[dict[str, Any]] = result.get("highlights", [])
     video_name = Path(result.get("video_path") or result.get("transcript_json_path") or "video").name
     hl_json_name = Path(result.get("highlights_json_path") or "highlights.json").name
+    reviewed_cnt = sum(
+        1 for item in highlights if normalize_review_status(item.get("review_status")) == "reviewed"
+    )
+    draft_cnt = len(highlights) - reviewed_cnt
 
     lines: list[str] = [
         f"# 高光切片审片清单：{video_name}",
@@ -1969,7 +2306,8 @@ def export_review_markdown(
         f"- **原视频总时长**：`{result.get('total_duration_str', '-')}`（{result.get('total_duration_sec', 0.0)} 秒）",
         f"- **自适应档位**：{plan.get('duration_tier', '自定义')} -> 目标精选 `{plan.get('target_count', len(highlights))}` 条，单段 `{plan.get('min_clip_sec', 15)}~{plan.get('max_clip_sec', 60)}` 秒",
         f"- **使用模型**：`{result.get('model', 'unknown')}` | 实际筛选命中：`{result.get('highlight_count', len(highlights))}` 条 | 耗时：`{result.get('elapsed_sec', 0.0)}` 秒",
-        f"- **人工审片指引**：默认全部 `" + '"selected": true' + f"`；如需剔除某段，请打开 `{hl_json_name}` 把对应条目改为 `" + '"selected": false' + "`，下一步 Step 4 将自动跳过。",
+        f"- **人工审校进度**：已人工校对 `{reviewed_cnt}` 条 / AI初稿待校 `{draft_cnt}` 条",
+        f"- **人工审片指引**：AI 产出默认标记为 `[AI初稿待校]`（`review_status: \"draft\"`），建议在工作台逐条核对后再导出；如需剔除某段，请打开 `{hl_json_name}` 把对应条目改为 `" + '"selected": false' + "`，下一步 Step 4 将自动跳过。",
         "",
         "## 二、高光总览速查表",
         "",
@@ -1980,13 +2318,16 @@ def export_review_markdown(
     else:
         lines.extend(
             [
-                "| 排名 | 评分 | 时间段 | 时长 | 中文标题 | 一句话中文梗概 |",
-                "| :---: | :---: | :--- | :---: | :--- | :--- |",
+                "| 排名 | 审校状态 | 评分 | 时间段 | 时长 | 中文标题 | 一句话中文梗概 |",
+                "| :---: | :---: | :---: | :--- | :---: | :--- | :--- |",
             ]
         )
         for idx, item in enumerate(highlights, start=1):
             rank = item.get("rank", idx)
-            score = item.get("score", 0.0)
+            status_val = normalize_review_status(item.get("review_status"))
+            status_badge = "[已人工校对]" if status_val == "reviewed" else "[AI初稿待校]"
+            raw_score = item.get("score")
+            score_disp = "手动" if raw_score is None or raw_score == "" else str(raw_score)
             s_sec = float(item.get("start_sec", 0.0))
             e_sec = float(item.get("end_sec", s_sec))
             dur_s = float(item.get("duration_sec", max(0.0, e_sec - s_sec)))
@@ -1997,14 +2338,23 @@ def export_review_markdown(
             safe_title = title_zh.replace("|", "\\|")
             safe_summary = summary_zh.replace("|", "\\|")
             lines.append(
-                f"| #{rank} | **{score}** | `{s_str} - {e_str}` | "
+                f"| #{rank} | {status_badge} | **{score_disp}** | `{s_str} - {e_str}` | "
                 f"{dur_s:.1f}s | {safe_title} | {safe_summary} |"
             )
 
         lines.extend(["", "## 三、逐条审片详卡（附原声台词核对）", ""])
         for idx, item in enumerate(highlights, start=1):
             rank = item.get("rank", idx)
-            score = item.get("score", 0.0)
+            status_val = normalize_review_status(item.get("review_status"))
+            status_badge = "[已人工校对]" if status_val == "reviewed" else "[AI初稿待校]"
+            raw_flags = item.get("review_flags") if isinstance(item.get("review_flags"), list) else []
+            flag_notes = [
+                f"{_REVIEW_FLAG_LABELS.get(str(f), str(f))} (`{f}`)"
+                for f in raw_flags
+                if str(f).strip()
+            ]
+            raw_score = item.get("score")
+            score_heading = "手动" if raw_score is None or raw_score == "" else f"{raw_score}分"
             s_sec = float(item.get("start_sec", 0.0))
             e_sec = float(item.get("end_sec", s_sec))
             dur_s = float(item.get("duration_sec", max(0.0, e_sec - s_sec)))
@@ -2016,18 +2366,19 @@ def export_review_markdown(
             reason = str(item.get("reason") or "")
             raw_tags = item.get("tags") or []
             tags_str = " / ".join(f"`{t}`" for t in raw_tags) if raw_tags else "`无标签`"
-            lines.extend(
-                [
-                    f"### #{rank} [{score}分] {title_zh}",
-                    "",
-                    f"- **时间定位**：`{s_str} - {e_str}`（精确秒数：`{s_sec}s ~ {e_sec}s`，时长 `{dur_s:.1f}s`）",
-                    f"- **英文标题**：{title_en or '（未生成）'}",
-                    f"- **剧情梗概**：{summary_zh}",
-                    f"- **入选理由**：{reason or '（未填写）'}",
-                    f"- **标签**：{tags_str}",
-                    "- **台词字幕核对**：",
-                ]
-            )
+            card_lines = [
+                f"### #{rank} [{score_heading}] {status_badge} {title_zh}",
+                "",
+                f"- **审校状态**：`{status_badge}`"
+                + (f" ｜ **复核提醒**：{'；'.join(flag_notes)}" if flag_notes else ""),
+                f"- **时间定位**：`{s_str} - {e_str}`（精确秒数：`{s_sec}s ~ {e_sec}s`，时长 `{dur_s:.1f}s`）",
+                f"- **英文标题**：{title_en or '（未生成）'}",
+                f"- **剧情梗概**：{summary_zh}",
+                f"- **入选理由**：{reason or '（未填写）'}",
+                f"- **标签**：{tags_str}",
+                "- **台词字幕核对**：",
+            ]
+            lines.extend(card_lines)
             bilingual_subs = item.get("subtitles") or []
             if bilingual_subs:
                 for q in bilingual_subs:
@@ -2051,7 +2402,21 @@ def export_review_markdown(
                         lines.append(f"  > `[{q_start} - {q_end}]`{vol} {q['text']}")
             lines.append("")
 
-    dst_md.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    md_content = "\n".join(lines).rstrip() + "\n"
+    tmp_md = dst_md.with_name(f".{dst_md.name}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp_md.write_text(md_content, encoding="utf-8")
+        for attempt in range(3):
+            try:
+                os.replace(tmp_md, dst_md)
+                break
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.1)
+    finally:
+        if tmp_md.exists():
+            tmp_md.unlink(missing_ok=True)
     return dst_md
 
 
@@ -2114,6 +2479,7 @@ def select_highlights_with_llm(
     concurrency: int = 4,
     llm_caller: Callable[[str, str], str] | None = None,
     polish_llm_caller: Callable[[str, str], str] | None = None,
+    source_language: str | None = None,
 ) -> dict[str, Any]:
     """Step 3 主入口：粗筛（默认 deepseek-flash）与双语精修双角色路由，导出审片清单。
 
@@ -2230,6 +2596,13 @@ def select_highlights_with_llm(
 
         polish_caller = _default_polish_caller
 
+    sample_speech = " ".join(str(s.get("text", "")) for s in segments[:40])
+    resolved_src_lang, resolved_tgt_lang, resolved_pair = resolve_subtitle_language_pair(
+        source_language=source_language or transcript_data.get("language"),
+        target_language=target_language,
+        sample_text=sample_speech,
+    )
+
     raw_candidates: list[dict[str, Any]] = []
     if chunks:
         total_chunks = len(chunks)
@@ -2240,7 +2613,8 @@ def select_highlights_with_llm(
                 video_name=video_name,
                 chunk_index=idx,
                 total_chunks=total_chunks,
-                source_language=transcript_data.get("language"),
+                source_language=resolved_src_lang,
+                target_language=resolved_tgt_lang,
             )
             payload: dict[str, Any] | None = None
             last_parse_err: ValueError | None = None
@@ -2268,15 +2642,11 @@ def select_highlights_with_llm(
         raw_items=raw_candidates,
         total_duration_sec=total_duration_sec,
         target_count=plan["target_count"],
+        source_language=resolved_src_lang,
+        target_language=resolved_tgt_lang,
     )
 
     # 第四步：针对精选出的高光区间并发执行整句语义重组、语境纠错与多语种母语意译
-    sample_speech = " ".join(str(s.get("text", "")) for s in segments[:40])
-    resolved_src_lang, resolved_tgt_lang, resolved_pair = resolve_subtitle_language_pair(
-        source_language=transcript_data.get("language"),
-        target_language=target_language,
-        sample_text=sample_speech,
-    )
     translated_ok_count = 0
     translation_fallback_count = 0
     if bilingual_subtitles and final_highlights and segments:
@@ -2288,9 +2658,25 @@ def select_highlights_with_llm(
             target_language=resolved_tgt_lang,
             hotwords=effective_hotwords,
             concurrency=concurrency,
+            reset_reviewed=True,
         )
         translated_ok_count = sum(1 for h in final_highlights if h.get("translation_status") == "ok")
         translation_fallback_count = sum(1 for h in final_highlights if h.get("translation_status") == "fallback")
+    else:
+        for h_item in final_highlights:
+            h_item["review_status"] = "draft"
+            raw_lines = _prepare_highlight_raw_lines(h_item, segments) if segments else []
+            h_item["review_flags"] = compute_review_flags(
+                h_item,
+                raw_lines=raw_lines,
+                source_language=resolved_src_lang,
+                target_language=resolved_tgt_lang,
+            )
+
+    reviewed_count = sum(
+        1 for h in final_highlights if normalize_review_status(h.get("review_status")) == "reviewed"
+    )
+    draft_count = len(final_highlights) - reviewed_count
 
     elapsed_sec = round(time.perf_counter() - start_time, 2)
     screen_model_name = screen_cfg["model"] if llm_caller is None else "mock/custom"
@@ -2316,6 +2702,8 @@ def select_highlights_with_llm(
         "chunk_count": len(chunks),
         "raw_candidate_count": len(raw_candidates),
         "highlight_count": len(final_highlights),
+        "reviewed_count": reviewed_count,
+        "draft_count": draft_count,
         "bilingual_subtitles": bool(bilingual_subtitles and translated_ok_count > 0),
         "translated_ok_count": translated_ok_count,
         "translation_fallback_count": translation_fallback_count,
@@ -2324,11 +2712,9 @@ def select_highlights_with_llm(
         "highlights": final_highlights,
     }
 
-    highlights_json_path.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    export_review_markdown(result, review_md_path, transcript_segments=segments)
+    with get_highlights_file_lock(highlights_json_path):
+        atomic_write_json(highlights_json_path, result, indent=2)
+        export_review_markdown(result, review_md_path, transcript_segments=segments)
     return result
 
 
@@ -2346,8 +2732,24 @@ def enrich_highlights_with_bilingual_subtitles(
     ranks: list[int] | None = None,
     concurrency: int = 4,
     llm_caller: Callable[[str, str], str] | None = None,
+    reset_reviewed: bool = True,
 ) -> dict[str, Any]:
-    """为已经生成的 `*_highlights.json` 补齐或定点重刷商业级双语字幕（保留既有起止时间与勾选状态）。"""
+    """为已经生成的 `*_highlights.json` 补齐或定点重刷商业级双语字幕（并发安全重读合并，绝不覆写用户期间审校内容）。"""
+    # 严格区分 ranks=None（全量）与 ranks=[]（非法空列表，绝不退化为全量重置 reviewed）
+    if ranks is not None:
+        if len(ranks) == 0:
+            raise ValueError("ranks 不能为空列表；如需全量重刷请传 ranks=None。")
+        target_ranks: set[int] | None = set()
+        for r in ranks:
+            if isinstance(r, bool):
+                raise ValueError(f"非法的片段排名：{r}")
+            r_int = int(r)
+            if r_int < 1:
+                raise ValueError(f"片段排名必须为正整数，当前传入：{r}")
+            target_ranks.add(r_int)
+    else:
+        target_ranks = None
+
     src_path = Path(input_json_path)
     if not src_path.is_file():
         raise FileNotFoundError(f"找不到输入文件：{src_path}")
@@ -2362,8 +2764,11 @@ def enrich_highlights_with_bilingual_subtitles(
                 f"未找到已有高光方案：{highlights_path}，请先运行普通筛选流程或去掉 --translate-only。"
             )
 
-    data = json.loads(highlights_path.read_text(encoding="utf-8"))
-    transcript_path = Path(data.get("transcript_json_path", ""))
+    # 阶段 1：短时加锁读取输入快照（绝不在持有文件锁期间执行 LLM 网络调用）
+    with get_highlights_file_lock(highlights_path):
+        snapshot_data = json.loads(highlights_path.read_text(encoding="utf-8"))
+
+    transcript_path = Path(snapshot_data.get("transcript_json_path", ""))
     if not transcript_path.is_file():
         stem = highlights_path.stem.removesuffix("_highlights")
         transcript_path = highlights_path.parent / f"{stem}_transcript.json"
@@ -2412,23 +2817,22 @@ def enrich_highlights_with_bilingual_subtitles(
         active_caller = _default_caller
 
     t0 = time.perf_counter()
-    highlights = list(data.get("highlights", []))
-    target_ranks = {int(r) for r in ranks} if ranks else None
+    snapshot_highlights = list(snapshot_data.get("highlights", []))
     sample_speech = " ".join(str(s.get("text", "")) for s in segments[:40])
     resolved_src_lang, resolved_tgt_lang, resolved_pair = resolve_subtitle_language_pair(
-        source_language=source_language or data.get("source_language") or transcript_data.get("language"),
-        target_language=target_language or data.get("target_language"),
+        source_language=source_language or snapshot_data.get("source_language") or transcript_data.get("language"),
+        target_language=target_language or snapshot_data.get("target_language"),
         sample_text=sample_speech,
     )
 
-    if target_ranks:
-        subset_indices = [
-            idx
-            for idx, item in enumerate(highlights)
-            if int(item.get("rank") or (idx + 1)) in target_ranks
+    # 阶段 2：无锁并发调用 LLM 精修目标片段，并按 rank 建立更新映射
+    if target_ranks is not None:
+        subset_items = [
+            item
+            for idx, item in enumerate(snapshot_highlights)
+            if isinstance(item, dict) and int(item.get("rank") or (idx + 1)) in target_ranks
         ]
-        subset_items = [highlights[i] for i in subset_indices]
-        polished_subset = translate_and_polish_highlight_subtitles(
+        polished_items = translate_and_polish_highlight_subtitles(
             highlights=subset_items,
             transcript_segments=segments,
             llm_caller=active_caller,
@@ -2437,13 +2841,11 @@ def enrich_highlights_with_bilingual_subtitles(
             hotwords=effective_hotwords,
             extra_context=effective_context,
             concurrency=concurrency,
+            reset_reviewed=reset_reviewed,
         )
-        enriched = list(highlights)
-        for orig_idx, updated_item in zip(subset_indices, polished_subset):
-            enriched[orig_idx] = updated_item
     else:
-        enriched = translate_and_polish_highlight_subtitles(
-            highlights=highlights,
+        polished_items = translate_and_polish_highlight_subtitles(
+            highlights=snapshot_highlights,
             transcript_segments=segments,
             llm_caller=active_caller,
             source_language=resolved_src_lang,
@@ -2451,10 +2853,13 @@ def enrich_highlights_with_bilingual_subtitles(
             hotwords=effective_hotwords,
             extra_context=effective_context,
             concurrency=concurrency,
+            reset_reviewed=reset_reviewed,
         )
 
-    ok_count = sum(1 for h in enriched if h.get("translation_status") == "ok")
-    fb_count = sum(1 for h in enriched if h.get("translation_status") == "fallback")
+    polished_by_rank: dict[int, dict[str, Any]] = {}
+    for idx, p_item in enumerate(polished_items, start=1):
+        r_key = int(p_item.get("rank") or idx)
+        polished_by_rank[r_key] = p_item
 
     out_dir = Path(output_dir) if output_dir is not None else highlights_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2462,24 +2867,86 @@ def enrich_highlights_with_bilingual_subtitles(
     stem = out_json.stem.removesuffix("_highlights")
     out_md = out_dir / f"{stem}_review.md"
 
-    data["highlights"] = enriched
-    # 仅全量重刷（未限定单条 ranks）或顶层语种为空时更新顶层语种，防止单条试翻污染其余片段语种标识
-    if not target_ranks or not data.get("target_language"):
-        data["source_language"] = resolved_src_lang
-        data["target_language"] = resolved_tgt_lang
-        data["subtitle_pair"] = resolved_pair
-    data["polish_model"] = polish_cfg["model"] if llm_caller is None else "mock/custom"
-    data["bilingual_subtitles"] = ok_count > 0
-    data["translated_ok_count"] = ok_count
-    data["translation_fallback_count"] = fb_count
-    data["token_usage"] = usage_tracker.summary()
-    data["highlights_json_path"] = str(out_json.resolve())
-    data["review_md_path"] = str(out_md.resolve())
-    data["elapsed_sec"] = round(time.perf_counter() - t0, 2)
+    # 阶段 3：写盘前加锁并重读磁盘最新 JSON 合并，彻底防止 T=0s 旧内存覆写用户期间审好的其他条目！
+    with get_highlights_file_lock(out_json):
+        if out_json.is_file():
+            try:
+                latest_data = json.loads(out_json.read_text(encoding="utf-8"))
+                if not isinstance(latest_data, dict):
+                    latest_data = dict(snapshot_data)
+            except Exception:
+                latest_data = dict(snapshot_data)
+        else:
+            latest_data = dict(snapshot_data)
 
-    out_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    export_review_markdown(data, out_md, transcript_segments=segments)
-    return data
+        disk_highlights = list(latest_data.get("highlights") or [])
+        merged_highlights: list[dict[str, Any]] = []
+        for idx, disk_item in enumerate(disk_highlights, start=1):
+            if not isinstance(disk_item, dict):
+                continue
+            r_key = int(disk_item.get("rank") or idx)
+            should_apply = (
+                (r_key in target_ranks and r_key in polished_by_rank)
+                if target_ranks is not None
+                else (r_key in polished_by_rank)
+            )
+            if should_apply:
+                polished_item = polished_by_rank[r_key]
+                # 基于磁盘最新条目合并本次翻译结果，保住用户在重翻期间可能刚修改的勾选/标题等非字幕元信息
+                merged_item = dict(disk_item)
+                merged_item["subtitles"] = polished_item.get("subtitles", [])
+                merged_item["translation_status"] = polished_item.get("translation_status", "ok")
+                merged_item["review_status"] = polished_item.get("review_status", "draft")
+                merged_item["review_flags"] = polished_item.get("review_flags", [])
+                merged_highlights.append(merged_item)
+            else:
+                # 未在本次重翻范围内的条目原封不动保留磁盘最新版本（包括期间人工标好的 reviewed 与改动）
+                merged_highlights.append(dict(disk_item))
+
+        # 同步补齐每条高光的规范化 title_tgt / title_src、review_status 与 review_flags
+        for h_item in merged_highlights:
+            t_zh = str(h_item.get("title_zh") or "").strip()
+            t_en = str(h_item.get("title_en") or "").strip()
+            if resolved_src_lang == "zh" and resolved_tgt_lang == "en":
+                h_item.setdefault("title_tgt", t_en or t_zh)
+                h_item.setdefault("title_src", t_zh or t_en)
+            else:
+                h_item.setdefault("title_tgt", t_zh or t_en)
+                h_item.setdefault("title_src", t_en or t_zh)
+            h_item["review_status"] = normalize_review_status(h_item.get("review_status"), default="draft")
+            if not isinstance(h_item.get("review_flags"), list):
+                h_item["review_flags"] = compute_review_flags(
+                    h_item,
+                    source_language=resolved_src_lang,
+                    target_language=resolved_tgt_lang,
+                )
+
+        ok_count = sum(1 for h in merged_highlights if h.get("translation_status") == "ok")
+        fb_count = sum(1 for h in merged_highlights if h.get("translation_status") == "fallback")
+        reviewed_count = sum(1 for h in merged_highlights if h.get("review_status") == "reviewed")
+        draft_count = len(merged_highlights) - reviewed_count
+
+        latest_data["highlights"] = merged_highlights
+        latest_data["highlight_count"] = len(merged_highlights)
+        # 仅全量重刷（未限定单条 ranks）或顶层语种为空时更新顶层语种，防止单条试翻污染其余片段语种标识
+        if target_ranks is None or not latest_data.get("target_language"):
+            latest_data["source_language"] = resolved_src_lang
+            latest_data["target_language"] = resolved_tgt_lang
+            latest_data["subtitle_pair"] = resolved_pair
+        latest_data["polish_model"] = polish_cfg["model"] if llm_caller is None else "mock/custom"
+        latest_data["bilingual_subtitles"] = ok_count > 0
+        latest_data["translated_ok_count"] = ok_count
+        latest_data["translation_fallback_count"] = fb_count
+        latest_data["reviewed_count"] = reviewed_count
+        latest_data["draft_count"] = draft_count
+        latest_data["token_usage"] = usage_tracker.summary()
+        latest_data["highlights_json_path"] = str(out_json.resolve())
+        latest_data["review_md_path"] = str(out_md.resolve())
+        latest_data["elapsed_sec"] = round(time.perf_counter() - t0, 2)
+
+        atomic_write_json(out_json, latest_data, indent=2)
+        export_review_markdown(latest_data, out_md, transcript_segments=segments)
+    return latest_data
 
 
 def _print_summary(result: dict[str, Any]) -> None:
@@ -2520,8 +2987,10 @@ def _print_summary(result: dict[str, Any]) -> None:
         print(f"{'排名':<4} {'评分':<5} {'时间段':<19} {'时长':<7} {'中文标题'}")
         for item in highlights:
             time_range = f"{item['start_str']} - {item['end_str']}"
+            raw_score = item.get("score")
+            score_cell = f"{float(raw_score):<5.1f}" if raw_score is not None and raw_score != "" else f"{'手动':<5}"
             print(
-                f"#{item['rank']:<3} {item['score']:<5.1f} {time_range:<19} "
+                f"#{item['rank']:<3} {score_cell} {time_range:<19} "
                 f"{item['duration_sec']:<5.1f}s  {item['title_zh']}"
             )
             print(f"     梗概: {item['summary_zh']}")

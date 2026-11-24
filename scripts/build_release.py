@@ -14,7 +14,7 @@
     python scripts/build_release.py --stage-only
 
     # 2. 完整编译 Windows 免 Python 一键便携包（需 .venv 已装 pyinstaller，默认自动注入品牌图标）
-    python scripts/build_release.py --version v0.9.0-beta
+    python scripts/build_release.py --version v0.9.2-beta
 """
 
 from __future__ import annotations
@@ -106,8 +106,12 @@ def run_security_audit(release_dir: Path) -> list[str]:
             ):
                 violations.append(f"发现禁止发布的敏感文件: {rel}")
                 continue
-            # 禁止携带开发机上的真实个人录屏或切片（assets/demo/ 除外）
-            if fpath.suffix.lower() in {".mp4", ".mkv", ".mov", ".flv", ".wav"} and not rel.startswith("assets/demo/"):
+            # 禁止携带开发机上的真实个人录屏、音频或切片（assets/demo/ 除外）
+            if (
+                fpath.suffix.lower()
+                in {".mp4", ".mkv", ".mov", ".flv", ".ts", ".webm", ".m4v", ".wav", ".m4a", ".mp3"}
+                and not rel.startswith("assets/demo/")
+            ):
                 violations.append(f"发现非示例音视频文件（疑为个人素材）: {rel}")
                 continue
             if fpath.suffix.lower() in _TEXT_SCAN_EXTS and fpath.stat().st_size <= 5 * 1024 * 1024:
@@ -241,18 +245,45 @@ def stage_portable_assets(release_dir: Path, include_ffmpeg: bool = True) -> Non
     if include_ffmpeg:
         bin_dir = release_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
+        copied_ffmpeg_exe: Path | None = None
         for fn in (check_ffmpeg_available, check_ffprobe_available):
             try:
                 exe_path = Path(fn())
-                shutil.copy2(exe_path, bin_dir / exe_path.name)
+                dst_exe = bin_dir / exe_path.name
+                shutil.copy2(exe_path, dst_exe)
+                if fn is check_ffmpeg_available:
+                    copied_ffmpeg_exe = dst_exe
                 print(f"[内置媒体引擎] 已打入 {exe_path.name} ({exe_path.stat().st_size / 1048576:.1f} MB)")
             except RuntimeError as exc:
                 print(f"[警告] 未找到可内置的 FFmpeg 工具：{exc}", file=sys.stderr)
-        # 随附 GPLv3 许可说明（符合 gyan.dev FFmpeg GPLv3 独立二进制分发合规要求）
+
+        # 动态探测内置 FFmpeg 真实版本首行，避免硬编码过期版本号
+        ffmpeg_version_line = "FFmpeg (version unavailable at build time)"
+        if copied_ffmpeg_exe and copied_ffmpeg_exe.is_file():
+            try:
+                ver_proc = subprocess.run(
+                    [str(copied_ffmpeg_exe), "-version"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                    check=False,
+                )
+                first_line = next(
+                    (ln.strip() for ln in (ver_proc.stdout or "").splitlines() if ln.strip()),
+                    "",
+                )
+                if first_line:
+                    ffmpeg_version_line = first_line
+            except Exception:
+                pass
+
+        # 随附 GPLv3 许可说明（符合 FFmpeg GPLv3 独立二进制分发合规要求）
         ffmpeg_notice = (
             "Bundled FFmpeg / FFprobe binaries (bin/ffmpeg.exe, bin/ffprobe.exe)\n"
             "====================================================================\n"
-            "Source build: FFmpeg 9.0 full_build by gyan.dev (https://www.gyan.dev/ffmpeg/builds/)\n"
+            f"Detected build: {ffmpeg_version_line}\n"
             "License: GNU General Public License v3.0 (GPLv3)\n"
             "Official FFmpeg source code: https://ffmpeg.org/download.html\n"
             "Full GPLv3 license text: https://www.gnu.org/licenses/gpl-3.0.txt\n\n"
@@ -290,6 +321,10 @@ def build_pyinstaller_onedir(release_dir: Path, icon_path: Path | None = None) -
         "webview",
         "--hidden-import",
         "src.corpus_builder",
+        "--hidden-import",
+        "src.nle_export",
+        "--hidden-import",
+        "src.chat_radar",
         "--hidden-import",
         "uvicorn.logging",
         "--hidden-import",
@@ -376,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(description="Solacut 安全发布与 Windows 免 Python 便携包构建器")
-    parser.add_argument("--version", default="v0.9.0-beta", help="发布版本号（默认 v0.9.0-beta）")
+    parser.add_argument("--version", default="v0.9.2-beta", help="发布版本号（默认 v0.9.2-beta）")
     parser.add_argument("--out-root", default=str(PROJECT_ROOT / "release"), help="发布产物输出根目录")
     parser.add_argument(
         "--icon",

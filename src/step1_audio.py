@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -648,6 +649,106 @@ def detect_high_volume_segments(
     return round(threshold, 4), segments
 
 
+def detect_dead_air_segments(
+    rms_curve: np.ndarray,
+    hop_sec: float,
+    total_duration_sec: float,
+    min_dead_air_sec: float = 15.0,
+) -> list[dict[str, Any]]:
+    """检测长时间挂机/黑屏加载/离席导致的死寂长空白段（Dead Air Map）。
+
+    设计红线：
+    - 严格尊重剪辑师社区底线，绝不将 0.5~5 秒的正常说话停顿或喜剧气口标成空白；
+    - 仅标记持续时长 `>= min_dead_air_sec`（默认 15.0 秒）且能量显著低于语音活跃底噪的连续死寂段，
+      供前端时间线灰显并提供「审片自动跳过长空白」辅助开关。
+
+    参数：
+        rms_curve: 一维 RMS 能量序列（归一化 0.0 ~ 1.0）。
+        hop_sec: 相邻 RMS 采样点的步长（秒，通常等于 `window_sec`）。
+        total_duration_sec: 音视频总时长（秒）。
+        min_dead_air_sec: 判定为死寂长空白段的最小连续秒数（默认 15.0）。
+    返回：
+        死寂段列表，每条包含 `start_sec`, `end_sec`, `duration_sec`, `start_str`, `end_str`。
+    """
+    try:
+        hop_val = float(hop_sec)
+        min_dead_val = float(min_dead_air_sec)
+        dur_val = 0.0 if total_duration_sec is None else float(total_duration_sec)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"死寂段检测参数必须为有限数字：{exc}") from exc
+
+    if not math.isfinite(hop_val) or hop_val <= 0.0:
+        raise ValueError(f"hop_sec 必须为有限正数，当前传入：{hop_sec}")
+    if not math.isfinite(min_dead_val) or min_dead_val <= 0.0:
+        raise ValueError(f"min_dead_air_sec 必须为有限正数，当前传入：{min_dead_air_sec}")
+    if not math.isfinite(dur_val) or dur_val < 0.0:
+        raise ValueError(f"total_duration_sec 必须为有限非负数，当前传入：{total_duration_sec}")
+
+    arr = np.asarray(rms_curve, dtype=np.float64).ravel()
+    if arr.size == 0 or dur_val <= 0.0 or dur_val < min_dead_val:
+        return []
+
+    arr = np.where(np.isfinite(arr), np.maximum(arr, 0.0), 0.0)
+
+    # 自适应死寂阈值：基于活跃语音中位响度设定相对低阈并钳制安全上限，不误伤轻声或低增益主播
+    max_val = float(np.max(arr))
+    active_vals = arr[arr >= 0.01]
+    if active_vals.size > 0:
+        speech_median = float(np.median(active_vals))
+        dead_threshold = min(0.012, max(0.003, speech_median * 0.12))
+    elif max_val >= 0.005:
+        active_p75 = float(np.percentile(arr, 75))
+        dead_threshold = min(0.006, max(0.0015, active_p75 * 0.20))
+    elif max_val > 1e-4:
+        # 低增益轻声主播：走相对底噪比例（p50 * 0.25），绝不硬编码 0.005 误杀全片
+        p50 = float(np.percentile(arr, 50))
+        if p50 > 1e-4:
+            ref_level = p50
+        else:
+            nonzero_vals = arr[arr > 1e-4]
+            ref_level = float(np.median(nonzero_vals)) if nonzero_vals.size > 0 else max_val
+        dead_threshold = max(1e-5, min(max_val * 0.45, ref_level * 0.25))
+    else:
+        # 全片真实纯静音（能量 <= 1e-4）
+        dead_threshold = 1e-4
+
+    is_dead = arr <= dead_threshold
+    segments: list[dict[str, Any]] = []
+    run_start: int | None = None
+
+    def _flush_run(start_idx: int, end_idx: int) -> None:
+        seg_start = float(start_idx) * hop_val
+        seg_end = min(dur_val, float(end_idx + 1) * hop_val)
+        if seg_end <= seg_start:
+            return
+        start_rounded = round(seg_start, 2)
+        end_rounded = round(seg_end, 2)
+        dur_rounded = round(max(0.0, end_rounded - start_rounded), 2)
+        if dur_rounded + 1e-6 >= min_dead_val:
+            segments.append(
+                {
+                    "start_sec": start_rounded,
+                    "end_sec": end_rounded,
+                    "duration_sec": dur_rounded,
+                    "start_str": format_timestamp(seg_start),
+                    "end_str": format_timestamp(seg_end),
+                }
+            )
+
+    for idx, quiet in enumerate(is_dead):
+        if quiet:
+            if run_start is None:
+                run_start = idx
+        elif run_start is not None:
+            _flush_run(run_start, idx - 1)
+            run_start = None
+
+    if run_start is not None:
+        _flush_run(run_start, int(arr.size) - 1)
+
+    return segments
+
+
 def diagnose_stream_energy(
     peak_segments: list[dict[str, Any]],
     total_duration_sec: float,
@@ -840,8 +941,9 @@ def analyze_video_audio(
     vocal_bandpass: bool = True,
     bandpass_low_hz: float = 300.0,
     bandpass_high_hz: float = 3400.0,
+    min_dead_air_sec: float = 15.0,
 ) -> dict[str, Any]:
-    """一键执行 Step 1 完整流程：探测多音轨 -> 提取 WAV -> 带通计算 RMS -> 输出 JSON。
+    """一键执行 Step 1 完整流程：探测多音轨 -> 提取 WAV -> 带通计算 RMS -> 高能与死寂段检测 -> 输出 JSON。
 
     参数：
         video_path: 源视频文件路径。
@@ -855,8 +957,9 @@ def analyze_video_audio(
         vocal_bandpass: 是否开启 300~3400Hz 核心人声频段带通测算 RMS（默认 True）。
         bandpass_low_hz: 人声带通下限频率（默认 300.0 Hz）。
         bandpass_high_hz: 人声带通上限频率（默认 3400.0 Hz）。
+        min_dead_air_sec: 死寂长空白段最小连续秒数（默认 15.0，绝不标记短停顿）。
     返回：
-        包含元信息、音轨列表、阈值与 peak_segments 列表的完整字典。
+        包含元信息、音轨列表、阈值、peak_segments 与 dead_air_segments 的完整字典。
     """
     src_video = Path(video_path)
     if not src_video.is_file():
@@ -912,6 +1015,15 @@ def analyze_video_audio(
         total_duration=total_duration_sec,
     )
 
+    # 第三步半：检测长时间死寂空白段（Dead Air Map，绝不误标正常说话停顿）
+    dead_air_segments = detect_dead_air_segments(
+        rms_curve=rms_values,
+        hop_sec=window_sec,
+        total_duration_sec=total_duration_sec,
+        min_dead_air_sec=min_dead_air_sec,
+    )
+    dead_air_total_sec = round(sum(float(seg["duration_sec"]) for seg in dead_air_segments), 2)
+
     # 第四步：生成直播状态诊断评级与推荐参数
     diagnostics = diagnose_stream_energy(
         peak_segments=segments,
@@ -938,15 +1050,34 @@ def analyze_video_audio(
         "min_rms": min_rms,
         "rms_threshold": threshold,
         "segment_count": len(segments),
+        "dead_air_min_sec": float(min_dead_air_sec),
+        "dead_air_count": len(dead_air_segments),
+        "dead_air_total_sec": dead_air_total_sec,
+        "dead_air_segments": dead_air_segments,
         "diagnostics": diagnostics,
         "peak_segments": segments,
     }
 
-    # 将分析报告写成格式化中文 JSON，供人眼检查和 Step 2 直接读取
-    with json_path.open("w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    # 将分析报告原子写成格式化中文 JSON（禁用 NaN/Infinity），供人眼检查和 Step 2 直接读取
+    tmp_json = json_path.with_name(f".{json_path.name}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp_json.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+        os.replace(tmp_json, json_path)
+    finally:
+        if tmp_json.exists():
+            tmp_json.unlink(missing_ok=True)
 
     return result
+
+
+# 兼容别名：方便外部模块以 detect_audio_peaks() 调用 Step 1 音频高能与死寂段联合分析
+detect_audio_peaks = analyze_video_audio
+
+
+_SMPTE_TC_RE = re.compile(r"^\s*(\d{1,2}):(\d{2}):(\d{2})([:;])(\d{2,3})\s*$")
 
 
 def _parse_ffprobe_rate(rate_str: str | None) -> float:
@@ -958,17 +1089,74 @@ def _parse_ffprobe_rate(rate_str: str | None) -> float:
         num_s, _, den_s = text.partition("/")
         try:
             num, den = float(num_s), float(den_s)
-            return (num / den) if den > 0 else 0.0
+            if not (math.isfinite(num) and math.isfinite(den)) or den <= 0.0:
+                return 0.0
+            val = num / den
+            return val if math.isfinite(val) else 0.0
         except ValueError:
             return 0.0
     try:
-        return float(text)
+        val = float(text)
+        return val if math.isfinite(val) else 0.0
     except ValueError:
         return 0.0
 
 
+def _parse_smpte_timecode_to_sec(tc_str: str | None, fps: float) -> tuple[str, float]:
+    """解析 SMPTE 起始时间码字符串（HH:MM:SS:FF / HH:MM:SS;FF）并返回 (规范时间码, 起始秒数)。"""
+    if not tc_str:
+        return "", 0.0
+    match = _SMPTE_TC_RE.match(str(tc_str))
+    if not match:
+        return "", 0.0
+
+    hh = int(match.group(1))
+    mm = int(match.group(2))
+    ss = int(match.group(3))
+    sep = match.group(4)
+    ff = int(match.group(5))
+    if mm >= 60 or ss >= 60:
+        return "", 0.0
+
+    safe_fps = fps if (math.isfinite(fps) and 1.0 <= fps <= 240.0) else 30.0
+    tb = max(1, int(round(safe_fps)))
+    if ff >= max(tb, 1):
+        ff = min(ff, max(tb - 1, 0))
+
+    total_frames = (hh * 3600 + mm * 60 + ss) * tb + ff
+    is_drop = sep == ";" and tb in {30, 60}
+    if is_drop:
+        drop_per_min = 2 if tb == 30 else 4
+        total_mins = hh * 60 + mm
+        total_frames = max(0, total_frames - drop_per_min * (total_mins - total_mins // 10))
+
+    # 对 NTSC 下拉帧率采用精确有理帧率换算秒数，消除 1000/1001 漂移
+    exact_fps = safe_fps
+    for cand_num, cand_den in ((24000, 1001), (30000, 1001), (60000, 1001), (120000, 1001)):
+        cand = cand_num / float(cand_den)
+        if abs(safe_fps - cand) <= 0.05:
+            exact_fps = cand
+            break
+
+    sec = round(max(0.0, float(total_frames) / exact_fps), 6)
+    norm_tc = f"{hh:02d}:{mm:02d}:{ss:02d}{sep}{ff:02d}"
+    return norm_tc, sec
+
+
+def _extract_timecode_tag(tags: Any) -> str:
+    """从 ffprobe tags 字典中大小写不敏感地提取 timecode 字符串。"""
+    if not isinstance(tags, dict):
+        return ""
+    for k, v in tags.items():
+        if str(k).strip().lower() == "timecode" and v is not None:
+            text = str(v).strip()
+            if text:
+                return text
+    return ""
+
+
 def probe_media_info(video_path: str | Path) -> dict[str, Any]:
-    """单次 ffprobe 探测视频核心技术元数据（分辨率、真实 FPS、编码、时长、码率与音轨数）。"""
+    """全仓权威单次 ffprobe 媒体元数据探测（分辨率、真实 FPS、音轨参数、时长、码率与起始时间码）。"""
     src_video = Path(video_path)
     if not src_video.is_file():
         raise FileNotFoundError(f"找不到输入视频文件：{src_video}")
@@ -990,35 +1178,75 @@ def probe_media_info(video_path: str | Path) -> dict[str, Any]:
         err_summary = "\n".join(stderr_lines[-6:]) if stderr_lines else "未知错误"
         raise RuntimeError(f"FFprobe 探测媒体元数据失败：{err_summary}")
 
-    payload = json.loads(proc.stdout or "{}")
-    streams = payload.get("streams") or []
-    fmt = payload.get("format") or {}
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"FFprobe 媒体元数据 JSON 解析失败：{exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("FFprobe 媒体元数据输出结构异常")
 
-    video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
-    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+    streams = payload.get("streams") if isinstance(payload.get("streams"), list) else []
+    fmt = payload.get("format") if isinstance(payload.get("format"), dict) else {}
+
+    video_stream = next((s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"), None)
+    audio_streams = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "audio"]
+    data_streams = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "data"]
 
     width = int(video_stream.get("width") or 0) if video_stream else 0
     height = int(video_stream.get("height") or 0) if video_stream else 0
     video_codec = str(video_stream.get("codec_name") or "") if video_stream else ""
 
+    # 优先使用真实平均帧率 avg_frame_rate，避免 VFR/高 timebase 视频被 r_frame_rate 误报，缺失时回退 r_frame_rate
     fps = 0.0
     if video_stream:
-        fps = _parse_ffprobe_rate(video_stream.get("avg_frame_rate")) or _parse_ffprobe_rate(
-            video_stream.get("r_frame_rate")
-        )
+        avg_fps = _parse_ffprobe_rate(video_stream.get("avg_frame_rate"))
+        r_fps = _parse_ffprobe_rate(video_stream.get("r_frame_rate"))
+        if 0.5 < avg_fps <= 240.0:
+            fps = avg_fps
+        elif 0.5 < r_fps <= 240.0:
+            fps = r_fps
     if fps <= 0.5 or fps > 240.0:
         fps = 30.0
 
     try:
-        duration_sec = float(fmt.get("duration") or (video_stream.get("duration") if video_stream else 0.0) or 0.0)
+        raw_dur = float(fmt.get("duration") or (video_stream.get("duration") if video_stream else 0.0) or 0.0)
+        duration_sec = raw_dur if (math.isfinite(raw_dur) and raw_dur > 0.0) else 0.0
     except (TypeError, ValueError):
         duration_sec = 0.0
-    duration_sec = max(0.0, duration_sec)
 
     try:
-        bit_rate = float(fmt.get("bit_rate") or 0.0)
+        raw_br = float(fmt.get("bit_rate") or 0.0)
+        bit_rate = raw_br if (math.isfinite(raw_br) and raw_br > 0.0) else 0.0
     except (TypeError, ValueError):
         bit_rate = 0.0
+
+    has_audio = bool(audio_streams)
+    audio_channels = 0
+    audio_rate = 48000
+    if audio_streams:
+        a0 = audio_streams[0]
+        try:
+            ch_val = int(a0.get("channels") or 0)
+        except (TypeError, ValueError):
+            ch_val = 0
+        try:
+            sr_val = int(a0.get("sample_rate") or 0)
+        except (TypeError, ValueError):
+            sr_val = 0
+        audio_channels = max(1, min(8, ch_val)) if ch_val > 0 else 2
+        audio_rate = sr_val if sr_val >= 8000 else 48000
+
+    # 提取真实源片起始时间码（优先 tmcd 数据轨 -> 视频流 tags -> 容器 format tags）
+    raw_tc = ""
+    for ds in data_streams:
+        raw_tc = _extract_timecode_tag(ds.get("tags"))
+        if raw_tc:
+            break
+    if not raw_tc and video_stream:
+        raw_tc = _extract_timecode_tag(video_stream.get("tags"))
+    if not raw_tc:
+        raw_tc = _extract_timecode_tag(fmt.get("tags"))
+    start_timecode, start_timecode_sec = _parse_smpte_timecode_to_sec(raw_tc, fps)
 
     return {
         "path": str(src_video.resolve()),
@@ -1030,6 +1258,12 @@ def probe_media_info(video_path: str | Path) -> dict[str, Any]:
         "duration_str": format_timestamp(duration_sec) if duration_sec > 0 else "-",
         "bitrate_kbps": int(round(bit_rate / 1000.0)) if bit_rate > 0 else 0,
         "audio_stream_count": len(audio_streams),
+        "has_video": bool(video_stream is not None),
+        "has_audio": has_audio,
+        "audio_channels": audio_channels,
+        "audio_rate": audio_rate,
+        "start_timecode": start_timecode,
+        "start_timecode_sec": start_timecode_sec,
     }
 
 
@@ -1215,6 +1449,11 @@ def _print_summary(result: dict[str, Any]) -> None:
         f"(前 {result['top_percent']}%, 最低底线 {result['min_rms']})"
     )
     print(f"命中高能段 : {result['segment_count']} 个")
+    dead_air_segs = result.get("dead_air_segments") or []
+    if dead_air_segs:
+        print(
+            f"死寂长空白 : {len(dead_air_segs)} 段（累计 {result.get('dead_air_total_sec', 0.0)} 秒，审片时可一键跳过）"
+        )
     print("-" * 64)
 
     segments = result["peak_segments"]

@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -42,25 +43,91 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from src.nle_export import (  # noqa: E402
+    export_fcpxml,
+    export_premiere_xml,
+    extract_video_chapters,
+    probe_media_metadata,
+    resolve_fps_rational,
+    seconds_to_frames,
+)
 from src.step1_audio import (  # noqa: E402
     check_ffmpeg_available,
-    check_ffprobe_available,
     format_timestamp,
+    probe_media_info,
     run_media_subprocess,
 )
 from src.step2_asr import _visual_char_len, split_long_segment_by_words  # noqa: E402
+from src.step3_llm import atomic_write_json  # noqa: E402
+
+VALID_EXPORT_MODES: frozenset[str] = frozenset(
+    {
+        "lossless",
+        "vertical",
+        "landscape",
+        "nle_only",
+    }
+)
 
 VALID_SUBTITLE_LANG_MODES: frozenset[str] = frozenset(
-    {"bilingual", "bilingual_rev", "target", "source", "zh", "en"}
+    {
+        "bilingual",
+        "bilingual_src_top",
+        "bilingual_rev",
+        "target_only",
+        "target",
+        "source_only",
+        "source",
+        "zh_only",
+        "zh",
+        "en_only",
+        "en",
+        "none",
+    }
 )
 
 
-def _safe_ffprobe_bin() -> str | None:
-    """安全定位 ffprobe（优先应用内置 bin/ffprobe.exe，其次系统 PATH）。"""
-    try:
-        return check_ffprobe_available()
-    except RuntimeError:
-        return None
+def normalize_subtitle_lang_mode(subtitle_lang: str | None) -> str:
+    """将全部规范字幕模式与历史兼容别名归一化为内部标准值。"""
+    raw = (subtitle_lang or "bilingual").strip().lower()
+    alias_map: dict[str, str] = {
+        "bilingual": "bilingual",
+        "bilingual_src_top": "bilingual_src_top",
+        "bilingual_rev": "bilingual_src_top",
+        "target_only": "target_only",
+        "target": "target_only",
+        "zh_only": "target_only",
+        "source_only": "source_only",
+        "source": "source_only",
+        "en_only": "source_only",
+        "zh": "zh",
+        "en": "en",
+        "none": "none",
+        "off": "none",
+    }
+    if raw not in alias_map:
+        raise ValueError(
+            "subtitle_lang 仅支持 'bilingual' / 'bilingual_src_top' / 'target_only' / 'source_only' / 'none'"
+            f"（兼容 bilingual_rev / target / source / zh_only / en_only / zh / en），当前：{subtitle_lang}"
+        )
+    return alias_map[raw]
+
+
+def _resolve_highlight_title(
+    item: dict[str, Any],
+    target_language: str | None = None,
+    rank: int = 1,
+) -> str:
+    """按目标语种优先解析高光标题（优先 title_tgt，中文回落 title_zh，英文回落 title_en）。"""
+    tgt = (target_language or "").strip().lower()
+    title_tgt = str(item.get("title_tgt") or "").strip()
+    title_zh = str(item.get("title_zh") or "").strip()
+    title_en = str(item.get("title_en") or "").strip()
+    if title_tgt:
+        return title_tgt
+    if tgt.startswith("en"):
+        return title_en or title_zh or f"clip_{rank}"
+    return title_zh or title_en or f"clip_{rank}"
 
 
 def _resolve_ass_font_for_lang(lang_code: str | None, fallback: str = "Microsoft YaHei") -> str:
@@ -69,7 +136,7 @@ def _resolve_ass_font_for_lang(lang_code: str | None, fallback: str = "Microsoft
     if code.startswith("zh"):
         return "Microsoft YaHei"
     if code.startswith("ja") or code == "jp":
-        return "Meiryo"
+        return "Yu Gothic UI"
     if code.startswith("ko") or code == "kr":
         return "Malgun Gothic"
     if code.startswith(("en", "ru", "es", "fr", "de")):
@@ -130,11 +197,11 @@ def format_ass_timestamp(seconds: float) -> str:
 
 
 def format_timecode_fps(seconds: float, fps: float = 30.0) -> str:
-    """将秒数格式化为非丢帧专业剪辑时间码（HH:MM:SS:FF），用于 CSV / EDL。"""
-    fps_int = max(1, int(round(fps)))
-    total_frames = max(0, int(round(seconds * fps_int)))
-    frames = total_frames % fps_int
-    total_sec = total_frames // fps_int
+    """将秒数按精确有理数帧率（复用 `nle_export.seconds_to_frames`）格式化为专业剪辑时间码（HH:MM:SS:FF）。"""
+    _, _, timebase, _ = resolve_fps_rational(fps)
+    total_frames = seconds_to_frames(seconds, fps, min_frames=0)
+    frames = total_frames % timebase
+    total_sec = total_frames // timebase
     total_min, secs = divmod(total_sec, 60)
     hours, mins = divmod(total_min, 60)
     return f"{hours:02d}:{mins:02d}:{secs:02d}:{frames:02d}"
@@ -197,130 +264,22 @@ def wrap_subtitle_text(text: str, max_width: int = 32, newline: str = "\n") -> s
     return clean
 
 
-def probe_video_fps(video_path: Path) -> float:
-    """用 ffprobe 读取原视频真实帧率；读取失败时安全回退为 30.0。"""
-    ffprobe_bin = _safe_ffprobe_bin()
-    if not ffprobe_bin or not video_path.is_file():
-        return 30.0
-
-    cmd = [
-        ffprobe_bin,
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=r_frame_rate",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(video_path.resolve()),
-    ]
-    try:
-        proc = run_media_subprocess(cmd, timeout=15)
-        raw = proc.stdout.strip()
-        if proc.returncode == 0 and raw:
-            if "/" in raw:
-                num_str, den_str = raw.split("/", 1)
-                num, den = float(num_str), float(den_str)
-                fps = num / den if den > 0 else 30.0
-            else:
-                fps = float(raw)
-            if 1.0 < fps <= 240.0:
-                return round(fps, 3)
-    except Exception:
-        pass
-    return 30.0
-
-
-def probe_video_duration(video_path: Path) -> float:
-    """用 ffprobe 读取原视频总时长（秒）；读取失败时安全返回 0.0。"""
-    ffprobe_bin = _safe_ffprobe_bin()
-    if not ffprobe_bin or not video_path.is_file():
-        return 0.0
-
-    cmd = [
-        ffprobe_bin,
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(video_path.resolve()),
-    ]
-    try:
-        proc = run_media_subprocess(cmd, timeout=15)
-        raw = proc.stdout.strip()
-        if proc.returncode == 0 and raw:
-            dur = float(raw)
-            if dur > 0:
-                return round(dur, 3)
-    except Exception:
-        pass
-    return 0.0
-
-
-def probe_video_dimensions(video_path: Path) -> tuple[int, int]:
-    """用 ffprobe 读取原视频宽高；读取失败时回退 (1920, 1080)。"""
-    ffprobe_bin = _safe_ffprobe_bin()
-    if not ffprobe_bin or not video_path.is_file():
-        return 1920, 1080
-
-    cmd = [
-        ffprobe_bin,
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=width,height",
-        "-of",
-        "json",
-        str(video_path.resolve()),
-    ]
-    try:
-        proc = run_media_subprocess(cmd, timeout=15)
-        if proc.returncode == 0 and proc.stdout.strip():
-            data = json.loads(proc.stdout)
-            streams = data.get("streams", [])
-            if streams:
-                w = int(streams[0].get("width", 0))
-                h = int(streams[0].get("height", 0))
-                if w > 0 and h > 0:
-                    return w, h
-    except Exception:
-        pass
-    return 1920, 1080
-
-
 def probe_clip_actual_start_offset(
     clipped_mp4: Path,
     requested_duration_sec: float,
 ) -> float:
-    """测量无损切片因关键帧前移而多出的前导秒数，用于重新对齐外挂 SRT 避免字幕抢跑。
+    """测量无损切片因关键帧前移而多出的前导秒数（复用 `step1_audio.probe_media_info`）。
 
     在 AV1/H.264 长 GOP 直播录屏上直接 `-c copy` 时，FFmpeg 会对齐到请求起点前的最近关键帧，
     导致成片实际时长往往比 `end_sec - start_sec` 多出 0.5 ~ 4 秒；如果字幕不顺延补偿这段
     前导画面，外挂字幕就会提前几秒出现。
     """
-    ffprobe_bin = _safe_ffprobe_bin()
-    if not ffprobe_bin or not clipped_mp4.is_file():
+    if not clipped_mp4.is_file():
         return 0.0
-
-    cmd = [
-        ffprobe_bin,
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(clipped_mp4),
-    ]
     try:
-        proc = run_media_subprocess(cmd, timeout=15)
-        if proc.returncode == 0 and proc.stdout.strip():
-            actual_duration = float(proc.stdout.strip())
+        info = probe_media_info(clipped_mp4)
+        actual_duration = float(info.get("duration_sec") or 0.0)
+        if actual_duration > 0.0:
             lead_in = actual_duration - float(requested_duration_sec)
             if 0.1 <= lead_in <= 15.0:
                 return round(lead_in, 3)
@@ -422,10 +381,9 @@ def generate_clip_srt(
     target_language: str | None = None,
 ) -> int:
     """从多语种精修字幕或 Step 2 字幕中提取当前切片区间的台词并保存为 .srt 文件。"""
-    if subtitle_lang not in VALID_SUBTITLE_LANG_MODES:
-        raise ValueError(
-            f"subtitle_lang 仅支持 'bilingual' / 'bilingual_rev' / 'target' / 'source' / 'zh' / 'en'，当前：{subtitle_lang}"
-        )
+    norm_mode = normalize_subtitle_lang_mode(subtitle_lang)
+    if norm_mode == "none":
+        return 0
 
     dst_srt = Path(srt_path)
     dst_srt.parent.mkdir(parents=True, exist_ok=True)
@@ -449,15 +407,15 @@ def generate_clip_srt(
         zh = row["text_zh"]
         en = row["text_en"] or row["text_orig"]
 
-        if subtitle_lang == "target":
+        if norm_mode == "target_only":
             body = wrap_subtitle_text(tgt_text or src_text, max_width=tgt_w, newline="\n")
-        elif subtitle_lang == "source":
+        elif norm_mode == "source_only":
             body = wrap_subtitle_text(src_text or tgt_text, max_width=src_w, newline="\n")
-        elif subtitle_lang == "zh":
+        elif norm_mode == "zh":
             body = wrap_subtitle_text(zh or tgt_text or en, max_width=32, newline="\n")
-        elif subtitle_lang == "en":
+        elif norm_mode == "en":
             body = wrap_subtitle_text(en or src_text or zh, max_width=42, newline="\n")
-        elif subtitle_lang == "bilingual_rev":
+        elif norm_mode == "bilingual_src_top":
             if src_text and tgt_text and src_text != tgt_text:
                 body = (
                     f"{wrap_subtitle_text(src_text, max_width=src_w, newline=' ')}\n"
@@ -504,10 +462,9 @@ def generate_clip_ass(
     target_language: str | None = None,
 ) -> int:
     """生成锁定 PlayResX/Y 的专业多语种 ASS 高级字幕（支持任意双语分层排版、多语种原生字体与顶部标题条）。"""
-    if subtitle_lang not in VALID_SUBTITLE_LANG_MODES:
-        raise ValueError(
-            f"subtitle_lang 仅支持 'bilingual' / 'bilingual_rev' / 'target' / 'source' / 'zh' / 'en'，当前：{subtitle_lang}"
-        )
+    norm_mode = normalize_subtitle_lang_mode(subtitle_lang)
+    if norm_mode == "none":
+        return 0
 
     dst_ass = Path(ass_path)
     dst_ass.parent.mkdir(parents=True, exist_ok=True)
@@ -550,12 +507,17 @@ def generate_clip_ass(
         outline_title = max(1.5, round(3.4 * scale, 1))
         shadow_sz = max(0.8, round(1.5 * scale, 1))
 
-    is_dual = subtitle_lang in {"bilingual", "bilingual_rev"}
-    # 主行（Style: ZH）与副行（Style: EN）根据实际语种自动选择 Windows 原生零缺字字体
+    is_dual = norm_mode in {"bilingual", "bilingual_src_top"}
+    # 顶部标题条固定采用目标语种零缺字字体；主行（Style: ZH）与副行（Style: EN）按实际上下行语种精准选字
     eff_tgt_lang = (target_language or "zh").strip().lower()
     eff_src_lang = (source_language or "en").strip().lower()
-    top_lang = eff_src_lang if subtitle_lang == "bilingual_rev" else eff_tgt_lang
-    bot_lang = eff_tgt_lang if subtitle_lang == "bilingual_rev" else eff_src_lang
+    title_font = _resolve_ass_font_for_lang(eff_tgt_lang, fallback="Microsoft YaHei")
+    if norm_mode in {"bilingual_src_top", "source_only", "en"}:
+        top_lang = eff_src_lang
+        bot_lang = eff_tgt_lang
+    else:
+        top_lang = eff_tgt_lang
+        bot_lang = eff_src_lang
     primary_font = _resolve_ass_font_for_lang(top_lang, fallback="Microsoft YaHei")
     secondary_font = _resolve_ass_font_for_lang(bot_lang, fallback="Segoe UI")
 
@@ -575,8 +537,8 @@ def generate_clip_ass(
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
         "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        # Title：暖亮金黄 (#FDE047 -> BGR &H0047E0FD)，粗体，顶部居中 (Alignment=8)，按主语种动态匹配零缺字字体
-        f"Style: Title,{primary_font},{title_size},&H0047E0FD,&H000000FF,&H00120E0A,&H80000000,"
+        # Title：暖亮金黄 (#FDE047 -> BGR &H0047E0FD)，粗体，顶部居中 (Alignment=8)，始终随目标语种零缺字
+        f"Style: Title,{title_font},{title_size},&H0047E0FD,&H000000FF,&H00120E0A,&H80000000,"
         f"-1,0,0,0,100,100,1,0,1,{outline_title},{shadow_sz},8,{title_margin_lr},{title_margin_lr},{title_margin_v},1",
         # ZH（上行主字幕样式）：纯白粗体，黑描边，底部居中 (Alignment=2)
         f"Style: ZH,{primary_font},{zh_size},&H00FFFFFF,&H000000FF,&H00120E0A,&H64000000,"
@@ -592,7 +554,8 @@ def generate_clip_ass(
     events: list[str] = []
     clean_banner = str(title_banner or "").strip()
     if clean_banner and mode == "vertical":
-        wrapped_banner = wrap_subtitle_text(clean_banner, max_width=24, newline=r"\N")
+        banner_w = 24 if eff_tgt_lang.startswith(("zh", "ja", "ko")) else 34
+        wrapped_banner = wrap_subtitle_text(clean_banner, max_width=banner_w, newline=r"\N")
         events.append(
             f"Dialogue: 1,0:00:00.00,{format_ass_timestamp(clip_duration)},Title,,0,0,0,,{_escape_ass_text(wrapped_banner)}"
         )
@@ -612,27 +575,27 @@ def generate_clip_ass(
         zh = row["text_zh"]
         en = row["text_en"] or row["text_orig"]
 
-        if subtitle_lang == "target":
+        if norm_mode == "target_only":
             txt = wrap_subtitle_text(tgt_text or src_text, max_width=top_w, newline=r"\N")
             if txt:
                 events.append(f"Dialogue: 0,{t_start},{t_end},ZH,,0,0,0,,{_escape_ass_text(txt)}")
                 dialog_count += 1
-        elif subtitle_lang == "source":
-            txt = wrap_subtitle_text(src_text or tgt_text, max_width=bot_w, newline=r"\N")
+        elif norm_mode == "source_only":
+            txt = wrap_subtitle_text(src_text or tgt_text, max_width=top_w, newline=r"\N")
             if txt:
-                events.append(f"Dialogue: 0,{t_start},{t_end},EN,,0,0,0,,{_escape_ass_text(txt)}")
+                events.append(f"Dialogue: 0,{t_start},{t_end},ZH,,0,0,0,,{_escape_ass_text(txt)}")
                 dialog_count += 1
-        elif subtitle_lang == "zh":
+        elif norm_mode == "zh":
             txt = wrap_subtitle_text(zh or tgt_text or en, max_width=28, newline=r"\N")
             if txt:
                 events.append(f"Dialogue: 0,{t_start},{t_end},ZH,,0,0,0,,{_escape_ass_text(txt)}")
                 dialog_count += 1
-        elif subtitle_lang == "en":
+        elif norm_mode == "en":
             txt = wrap_subtitle_text(en or src_text or zh, max_width=42, newline=r"\N")
             if txt:
-                events.append(f"Dialogue: 0,{t_start},{t_end},EN,,0,0,0,,{_escape_ass_text(txt)}")
+                events.append(f"Dialogue: 0,{t_start},{t_end},ZH,,0,0,0,,{_escape_ass_text(txt)}")
                 dialog_count += 1
-        elif subtitle_lang == "bilingual_rev":
+        elif norm_mode == "bilingual_src_top":
             has_both = bool(src_text and tgt_text and src_text != tgt_text)
             if has_both:
                 top_txt = wrap_subtitle_text(src_text, max_width=top_w, newline=r"\N")
@@ -670,8 +633,32 @@ def generate_clip_ass(
     return dialog_count if dialog_count > 0 else len(events)
 
 
-def _score_to_marker_color(score: float) -> str:
-    """根据高光评分返回剪辑软件标记颜色标签（高分标红、次高标黄、其余标绿）。"""
+_CSV_FORMULA_PREFIX_RE = re.compile(r"^[\s]*[=+\-@\t\r]")
+
+
+def _sanitize_csv_cell(value: Any) -> str:
+    """防御 Excel / 表格软件 CSV 公式注入：对前导 `= + - @ \\t \\r` 统一前置单引号。"""
+    text = str(value or "").strip()
+    if text and _CSV_FORMULA_PREFIX_RE.match(text):
+        return f"'{text}"
+    return text
+
+
+def _parse_optional_score(raw_score: Any) -> float | None:
+    """安全解析可选评分；手动片段（None/空串）返回 None 绝不伪造假分。"""
+    if raw_score is None or raw_score == "":
+        return None
+    try:
+        val = float(raw_score)
+    except (TypeError, ValueError):
+        return None
+    return round(val, 1) if math.isfinite(val) else None
+
+
+def _score_to_marker_color(score: float | None) -> str:
+    """根据高光评分返回剪辑软件标记颜色标签（高分标红、次高标黄、手动/其余标绿）。"""
+    if score is None:
+        return "Blue"
     if score >= 9.0:
         return "Red"
     if score >= 8.0:
@@ -695,41 +682,53 @@ def export_edl_and_markers_csv(
     dst_csv.parent.mkdir(parents=True, exist_ok=True)
     dst_edl.parent.mkdir(parents=True, exist_ok=True)
 
-    with dst_csv.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(
-            [
-                "Rank",
-                "Record In",
-                "Record Out",
-                "Duration Sec",
-                "Color",
-                "Name",
-                "Notes",
-                "Start Sec",
-                "End Sec",
-                "Score",
-            ]
-        )
-        for item in highlights:
-            start_s = float(item["start_sec"])
-            end_s = float(item["end_sec"])
-            duration_s = round(end_s - start_s, 2)
-            score = float(item.get("score", 0.0))
+    tmp_csv = dst_csv.with_name(f".{dst_csv.name}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        with tmp_csv.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f)
             writer.writerow(
                 [
-                    item.get("rank", ""),
-                    format_timecode_fps(start_s, fps),
-                    format_timecode_fps(end_s, fps),
-                    duration_s,
-                    _score_to_marker_color(score),
-                    item.get("title_zh", ""),
-                    item.get("summary_zh", ""),
-                    round(start_s, 2),
-                    round(end_s, 2),
-                    score,
+                    "Rank",
+                    "Record In",
+                    "Record Out",
+                    "Duration Sec",
+                    "Color",
+                    "Name",
+                    "Notes",
+                    "Start Sec",
+                    "End Sec",
+                    "Score",
                 ]
             )
+            for item in highlights:
+                start_s = float(item["start_sec"])
+                end_s = float(item["end_sec"])
+                duration_s = round(end_s - start_s, 2)
+                score_val = _parse_optional_score(item.get("score"))
+                title_cell = _sanitize_csv_cell(
+                    item.get("title_zh") or item.get("title_tgt") or item.get("title_en") or ""
+                )
+                notes_cell = _sanitize_csv_cell(
+                    item.get("summary_zh") or item.get("summary_tgt") or item.get("reason") or ""
+                )
+                writer.writerow(
+                    [
+                        item.get("rank", ""),
+                        format_timecode_fps(start_s, fps),
+                        format_timecode_fps(end_s, fps),
+                        duration_s,
+                        _score_to_marker_color(score_val),
+                        title_cell,
+                        notes_cell,
+                        round(start_s, 2),
+                        round(end_s, 2),
+                        "" if score_val is None else score_val,
+                    ]
+                )
+        os.replace(tmp_csv, dst_csv)
+    finally:
+        if tmp_csv.exists():
+            tmp_csv.unlink(missing_ok=True)
 
     safe_title = sanitize_filename(Path(video_name).stem, max_len=24).upper()
     edl_lines: list[str] = [
@@ -749,20 +748,31 @@ def export_edl_and_markers_csv(
         rec_cursor += duration_s
 
         rank = item.get("rank", idx)
-        score = float(item.get("score", 0.0))
-        title_zh = str(item.get("title_zh", "")).strip()
-        summary_zh = str(item.get("summary_zh", "")).strip()
+        score_val = _parse_optional_score(item.get("score"))
+        score_label = "手动" if score_val is None else f"{score_val:.1f}分"
+        title_zh = str(
+            item.get("title_zh") or item.get("title_tgt") or item.get("title_en") or ""
+        ).strip()
+        summary_zh = str(
+            item.get("summary_zh") or item.get("summary_tgt") or item.get("reason") or ""
+        ).strip()
 
         edl_lines.extend(
             [
                 f"{idx:03d}  AX       V     C        {src_in} {src_out} {rec_in} {rec_out}",
                 f"* FROM CLIP NAME: {video_name}",
-                f"* COMMENT: [#{rank} {score:.1f}分] {title_zh} | {summary_zh}",
+                f"* COMMENT: [#{rank} {score_label}] {title_zh} | {summary_zh}",
                 "",
             ]
         )
 
-    dst_edl.write_text("\n".join(edl_lines), encoding="utf-8")
+    tmp_edl = dst_edl.with_name(f".{dst_edl.name}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp_edl.write_text("\n".join(edl_lines), encoding="utf-8")
+        os.replace(tmp_edl, dst_edl)
+    finally:
+        if tmp_edl.exists():
+            tmp_edl.unlink(missing_ok=True)
     return dst_csv, dst_edl
 
 
@@ -1157,19 +1167,21 @@ def render_highlight_clips(
     mode: str = "lossless",
     burn_subtitles: bool = True,
     subtitle_lang: str = "bilingual",
-    show_title_banner: bool = True,
+    show_title_banner: bool = False,
     encoder: str = "auto",
     width: int = 1080,
     height: int = 1920,
     limit: int | None = None,
     ranks: list[int] | None = None,
     on_progress: Callable[[str, int, str], None] | None = None,
+    only_reviewed: bool = False,
 ) -> dict[str, Any]:
-    """Step 4 主入口：按审片结果批量导出视频切片、双语 SRT/ASS 字幕与剪辑软件标记文件。"""
-    if subtitle_lang not in VALID_SUBTITLE_LANG_MODES:
+    """Step 4 主入口：按审片结果批量导出 NLE 工程交付包（FCPXML / Premiere XML / EDL / CSV）、双语字幕与视频切片。"""
+    if mode not in VALID_EXPORT_MODES:
         raise ValueError(
-            f"subtitle_lang 仅支持 'bilingual' / 'bilingual_rev' / 'target' / 'source' / 'zh' / 'en'，当前：{subtitle_lang}"
+            f"mode 仅支持 'lossless' / 'vertical' / 'landscape' / 'nle_only'，当前传入：{mode}"
         )
+    norm_sub_mode = normalize_subtitle_lang_mode(subtitle_lang)
 
     highlights_path = Path(highlights_json_path)
     if not highlights_path.is_file():
@@ -1212,36 +1224,45 @@ def render_highlight_clips(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     all_highlights: list[dict[str, Any]] = data.get("highlights", [])
-    if ranks:
-        # 显式指定定点 ranks（如点击单条导出按钮或 --ranks 2）时直接按排名匹配，不被 selected=False 静默吞掉
+    if ranks is not None:
+        if len(ranks) == 0:
+            raise ValueError("ranks 不能为空列表；如需导出全部已选片段请传 ranks=None。")
+        # 显式指定定点 ranks 时按排名匹配，但不允许绕过 only_reviewed 审校门禁
         rank_set = {int(r) for r in ranks}
         selected_items = [item for item in all_highlights if int(item.get("rank", 0)) in rank_set]
+        if not selected_items:
+            raise ValueError(f"找不到指定的片段排名：{ranks}")
     else:
         selected_items = [item for item in all_highlights if item.get("selected", True) is True]
+
+    # 统一强制执行 only_reviewed 门禁（无论是否显式传入 ranks）
+    if only_reviewed:
+        selected_items = [
+            item
+            for item in selected_items
+            if str(item.get("review_status") or "draft").strip().lower() == "reviewed"
+        ]
+        if not selected_items:
+            raise ValueError(
+                "当前没有已标记为「已人工校对」的高光片段，请先完成审校或取消勾选「仅导出已人工校对」"
+            )
     if limit is not None:
         selected_items = selected_items[:limit]
 
-    fps = probe_video_fps(resolved_video)
-    src_w, src_h = probe_video_dimensions(resolved_video)
-    video_duration_sec = probe_video_duration(resolved_video) or float(data.get("total_duration_sec") or 0.0)
-    ass_w, ass_h = (width, height) if mode == "vertical" else (src_w, src_h)
-
-    csv_path = out_dir / f"{stem}_markers.csv"
-    edl_path = out_dir / f"{stem}_markers.edl"
-    export_edl_and_markers_csv(
-        highlights=selected_items,
-        csv_path=csv_path,
-        edl_path=edl_path,
-        video_name=resolved_video.name,
-        fps=fps,
-    )
-
     total_t0 = time.perf_counter()
-    exported_clips: list[dict[str, Any]] = []
-    total_count = len(selected_items)
+    media_meta = probe_media_metadata(resolved_video)
+    fps = float(media_meta.get("fps") or 30.0)
+    video_duration_sec = float(media_meta.get("duration_sec") or 0.0) or float(data.get("total_duration_sec") or 0.0)
+    chapters = extract_video_chapters(resolved_video)
+    if not chapters and isinstance(data.get("chapters"), list):
+        chapters = [ch for ch in data["chapters"] if isinstance(ch, dict)]
+
+    ass_w, ass_h = (width, height) if mode == "vertical" else (int(media_meta["width"]), int(media_meta["height"]))
+
+    # 先对全部选中高光执行统一入出点边界校验与裁剪，保证 NLE 时间线与切片/SRT 坐标 100% 一致
+    prepared_items: list[dict[str, Any]] = []
     for seq_idx, item in enumerate(selected_items, start=1):
         rank = int(item.get("rank", seq_idx))
-        score = float(item.get("score", 0.0))
         start_sec = max(0.0, float(item["start_sec"]))
         end_sec = float(item["end_sec"])
         if video_duration_sec > 0:
@@ -1249,144 +1270,273 @@ def render_highlight_clips(
             end_sec = min(end_sec, video_duration_sec)
         if end_sec <= start_sec:
             raise ValueError(f"片段 #{rank} 的起止时间无效（{start_sec:.2f}s -> {end_sec:.2f}s），请先在审片区修正入出点。")
-        title_zh = str(item.get("title_zh") or f"clip_{rank}")
-        safe_title = sanitize_filename(title_zh, max_len=36)
-        item_subs = item.get("subtitles")
+        cloned = dict(item)
+        cloned["start_sec"] = start_sec
+        cloned["end_sec"] = end_sec
+        prepared_items.append(cloned)
 
+    if not prepared_items:
+        raise ValueError("没有可导出的有效高光片段（请至少勾选 1 条片段或检查筛选条件），已中止导出以保护现有产物。")
+
+    csv_path = out_dir / f"{stem}_markers.csv"
+    edl_path = out_dir / f"{stem}_markers.edl"
+    fcpxml_path = out_dir / f"{stem}_timeline.fcpxml"
+    premiere_xml_path = out_dir / f"{stem}_premiere.xml"
+
+    export_edl_and_markers_csv(
+        highlights=prepared_items,
+        csv_path=csv_path,
+        edl_path=edl_path,
+        video_name=resolved_video.name,
+        fps=fps,
+    )
+    export_fcpxml(
+        highlights=prepared_items,
+        video_path=resolved_video,
+        output_path=fcpxml_path,
+        fps=fps,
+        total_duration_sec=video_duration_sec or None,
+        chapters=chapters,
+        source_language=hl_src_lang or "en",
+        target_language=hl_tgt_lang or "zh",
+        media_metadata=media_meta,
+        include_subtitle_markers=False,
+        subtitle_lang=norm_sub_mode,
+    )
+    export_premiere_xml(
+        highlights=prepared_items,
+        video_path=resolved_video,
+        output_path=premiere_xml_path,
+        fps=fps,
+        total_duration_sec=video_duration_sec or None,
+        chapters=chapters,
+        source_language=hl_src_lang or "en",
+        target_language=hl_tgt_lang or "zh",
+        media_metadata=media_meta,
+        include_subtitle_markers=False,
+        subtitle_lang=norm_sub_mode,
+    )
+
+    exported_clips: list[dict[str, Any]] = []
+    total_count = len(prepared_items)
+
+    # 极速 NLE 工程包交付模式：零视频编码、零转码等待，仅产出 NLE 工程文件与独立双语 SRT
+    if mode == "nle_only":
         if on_progress is not None:
-            pct = 15 + int(((seq_idx - 1) / max(1, total_count)) * 80)
             on_progress(
                 "step4",
-                pct,
-                f"[{seq_idx}/{total_count}] 正在导出 #{rank:02d} {title_zh}（{format_timestamp(start_sec)}-{format_timestamp(end_sec)}）...",
+                35,
+                f"已生成 FCPXML / Premiere XML / EDL / CSV（检测到 {len(chapters)} 个 OBS 章节）...",
+            )
+        for seq_idx, item in enumerate(prepared_items, start=1):
+            rank = int(item.get("rank", seq_idx))
+            score_val = _parse_optional_score(item.get("score"))
+            score_tag = "手动" if score_val is None else f"{score_val:.1f}分"
+            start_sec = float(item["start_sec"])
+            end_sec = float(item["end_sec"])
+            title_display = _resolve_highlight_title(item, target_language=hl_tgt_lang, rank=rank)
+            title_zh = str(item.get("title_zh") or title_display)
+            safe_title = sanitize_filename(title_display, max_len=36)
+            item_subs = item.get("subtitles")
+
+            base_name = f"{rank:02d}_{score_tag}_{safe_title}"
+            out_srt = out_dir / f"{base_name}.srt"
+            srt_count = 0
+            if norm_sub_mode != "none":
+                srt_count = generate_clip_srt(
+                    transcript_segments=transcript_segments,
+                    clip_start_sec=start_sec,
+                    clip_end_sec=end_sec,
+                    srt_path=out_srt,
+                    subtitle_lang=norm_sub_mode,
+                    highlight_subtitles=item_subs,
+                    source_language=hl_src_lang,
+                    target_language=hl_tgt_lang,
+                )
+
+            exported_clips.append(
+                {
+                    "rank": rank,
+                    "score": score_val,
+                    "title_tgt": title_display,
+                    "title_zh": title_zh,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "start_str": item.get("start_str") or format_timestamp(start_sec),
+                    "end_str": item.get("end_str") or format_timestamp(end_sec),
+                    "duration_sec": round(end_sec - start_sec, 2),
+                    "mp4_path": "",
+                    "srt_path": str(out_srt.resolve()) if norm_sub_mode != "none" else "",
+                    "srt_line_count": srt_count,
+                    "subtitle_lang": norm_sub_mode,
+                    "lead_in_offset_sec": 0.0,
+                    "encoder": "nle_only",
+                    "burned_subtitles": False,
+                    "size_mb": 0.0,
+                    "elapsed_sec": 0.0,
+                }
+            )
+            if on_progress is not None:
+                pct = 40 + int((seq_idx / max(1, total_count)) * 55)
+                on_progress(
+                    "step4",
+                    min(96, pct),
+                    f"[{seq_idx}/{total_count}] 已打包 NLE 工程与字幕 #{rank:02d} {title_display}",
+                )
+    else:
+        for seq_idx, item in enumerate(prepared_items, start=1):
+            rank = int(item.get("rank", seq_idx))
+            score_val = _parse_optional_score(item.get("score"))
+            score_tag = "手动" if score_val is None else f"{score_val:.1f}分"
+            start_sec = float(item["start_sec"])
+            end_sec = float(item["end_sec"])
+            title_display = _resolve_highlight_title(item, target_language=hl_tgt_lang, rank=rank)
+            title_zh = str(item.get("title_zh") or title_display)
+            safe_title = sanitize_filename(title_display, max_len=36)
+            item_subs = item.get("subtitles")
+
+            if on_progress is not None:
+                pct = 15 + int(((seq_idx - 1) / max(1, total_count)) * 80)
+                on_progress(
+                    "step4",
+                    pct,
+                    f"[{seq_idx}/{total_count}] 正在导出 #{rank:02d} {title_display}（{format_timestamp(start_sec)}-{format_timestamp(end_sec)}）...",
+                )
+
+            base_name = f"{rank:02d}_{score_tag}_{safe_title}"
+            out_mp4 = out_dir / f"{base_name}.mp4"
+            out_srt = out_dir / f"{base_name}.srt"
+            tmp_ass_for_render = out_dir / f"_render_style_{uuid.uuid4().hex[:6]}.ass"
+            srt_existed_before = out_srt.exists()
+
+            srt_count = 0
+            if norm_sub_mode != "none":
+                srt_count = generate_clip_srt(
+                    transcript_segments=transcript_segments,
+                    clip_start_sec=start_sec,
+                    clip_end_sec=end_sec,
+                    srt_path=out_srt,
+                    subtitle_lang=norm_sub_mode,
+                    highlight_subtitles=item_subs,
+                    source_language=hl_src_lang,
+                    target_language=hl_tgt_lang,
+                )
+
+            ass_events_count = 0
+            effective_burn = bool(burn_subtitles and norm_sub_mode != "none")
+            if mode != "lossless" and effective_burn:
+                ass_events_count = generate_clip_ass(
+                    transcript_segments=transcript_segments,
+                    clip_start_sec=start_sec,
+                    clip_end_sec=end_sec,
+                    ass_path=tmp_ass_for_render,
+                    width=ass_w,
+                    height=ass_h,
+                    subtitle_lang=norm_sub_mode,
+                    title_banner=title_display if show_title_banner else None,
+                    mode=mode,
+                    highlight_subtitles=item_subs,
+                    source_language=hl_src_lang,
+                    target_language=hl_tgt_lang,
+                )
+
+            try:
+                cut_info = cut_single_clip(
+                    video_path=resolved_video,
+                    start_sec=start_sec,
+                    end_sec=end_sec,
+                    out_mp4=out_mp4,
+                    mode=mode,
+                    srt_path=out_srt if srt_count > 0 else None,
+                    ass_path=tmp_ass_for_render if ass_events_count > 0 else None,
+                    burn_subtitles=effective_burn,
+                    encoder=encoder,
+                    width=width,
+                    height=height,
+                )
+            except Exception:
+                # 切片失败时清理本次新建的孤儿 .srt，绝不留下无对应视频的垃圾字幕
+                if not srt_existed_before and out_srt.exists():
+                    out_srt.unlink(missing_ok=True)
+                raise
+            finally:
+                if tmp_ass_for_render.exists():
+                    tmp_ass_for_render.unlink(missing_ok=True)
+
+            # 若为无损模式且存在明显前导关键帧偏移，重新生成对齐后的 SRT 防止字幕抢跑
+            lead_in = float(cut_info.get("lead_in_offset_sec", 0.0))
+            if mode == "lossless" and lead_in > 0.0 and norm_sub_mode != "none":
+                aligned_start = max(0.0, start_sec - lead_in)
+                srt_count = generate_clip_srt(
+                    transcript_segments=transcript_segments,
+                    clip_start_sec=aligned_start,
+                    clip_end_sec=end_sec,
+                    srt_path=out_srt,
+                    subtitle_lang=norm_sub_mode,
+                    highlight_subtitles=item_subs,
+                    source_language=hl_src_lang,
+                    target_language=hl_tgt_lang,
+                )
+
+            size_mb = round(out_mp4.stat().st_size / (1024.0 * 1024.0), 2)
+            if on_progress is not None:
+                pct = 15 + int((seq_idx / max(1, total_count)) * 80)
+                enc_tag = cut_info["encoder"]
+                aac_note = "（已自动转 AAC 兼容封装）" if enc_tag == "copy+aac" else ""
+                on_progress(
+                    "step4",
+                    min(96, pct),
+                    f"[{seq_idx}/{total_count}] 完成 #{rank:02d} ({size_mb:.2f}MB | {cut_info['elapsed_sec']}s | {enc_tag}){aac_note}",
+                )
+            exported_clips.append(
+                {
+                    "rank": rank,
+                    "score": score_val,
+                    "title_tgt": title_display,
+                    "title_zh": title_zh,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "start_str": item.get("start_str") or format_timestamp(start_sec),
+                    "end_str": item.get("end_str") or format_timestamp(end_sec),
+                    "duration_sec": round(end_sec - start_sec, 2),
+                    "mp4_path": cut_info["mp4_path"],
+                    "srt_path": str(out_srt.resolve()) if norm_sub_mode != "none" else "",
+                    "srt_line_count": srt_count,
+                    "subtitle_lang": norm_sub_mode,
+                    "lead_in_offset_sec": lead_in,
+                    "encoder": cut_info["encoder"],
+                    "burned_subtitles": cut_info["burned_subtitles"],
+                    "size_mb": size_mb,
+                    "elapsed_sec": cut_info["elapsed_sec"],
+                }
             )
 
-        base_name = f"{rank:02d}_{score:.1f}分_{safe_title}"
-        out_mp4 = out_dir / f"{base_name}.mp4"
-        out_srt = out_dir / f"{base_name}.srt"
-        tmp_ass_for_render = out_dir / f"_render_style_{uuid.uuid4().hex[:6]}.ass"
-        srt_existed_before = out_srt.exists()
-
-        srt_count = generate_clip_srt(
-            transcript_segments=transcript_segments,
-            clip_start_sec=start_sec,
-            clip_end_sec=end_sec,
-            srt_path=out_srt,
-            subtitle_lang=subtitle_lang,
-            highlight_subtitles=item_subs,
-            source_language=hl_src_lang,
-            target_language=hl_tgt_lang,
-        )
-
-        ass_events_count = 0
-        if mode != "lossless" and burn_subtitles:
-            ass_events_count = generate_clip_ass(
-                transcript_segments=transcript_segments,
-                clip_start_sec=start_sec,
-                clip_end_sec=end_sec,
-                ass_path=tmp_ass_for_render,
-                width=ass_w,
-                height=ass_h,
-                subtitle_lang=subtitle_lang,
-                title_banner=title_zh if show_title_banner else None,
-                mode=mode,
-                highlight_subtitles=item_subs,
-                source_language=hl_src_lang,
-                target_language=hl_tgt_lang,
-            )
-
-        try:
-            cut_info = cut_single_clip(
-                video_path=resolved_video,
-                start_sec=start_sec,
-                end_sec=end_sec,
-                out_mp4=out_mp4,
-                mode=mode,
-                srt_path=out_srt if srt_count > 0 else None,
-                ass_path=tmp_ass_for_render if ass_events_count > 0 else None,
-                burn_subtitles=burn_subtitles,
-                encoder=encoder,
-                width=width,
-                height=height,
-            )
-        except Exception:
-            # 切片失败时清理本次新建的孤儿 .srt，绝不留下无对应视频的垃圾字幕
-            if not srt_existed_before and out_srt.exists():
-                out_srt.unlink(missing_ok=True)
-            raise
-        finally:
-            if tmp_ass_for_render.exists():
-                tmp_ass_for_render.unlink(missing_ok=True)
-
-        # 若为无损模式且存在明显前导关键帧偏移，重新生成对齐后的 SRT 防止字幕抢跑
-        lead_in = float(cut_info.get("lead_in_offset_sec", 0.0))
-        if mode == "lossless" and lead_in > 0.0:
-            aligned_start = max(0.0, start_sec - lead_in)
-            srt_count = generate_clip_srt(
-                transcript_segments=transcript_segments,
-                clip_start_sec=aligned_start,
-                clip_end_sec=end_sec,
-                srt_path=out_srt,
-                subtitle_lang=subtitle_lang,
-                highlight_subtitles=item_subs,
-                source_language=hl_src_lang,
-                target_language=hl_tgt_lang,
-            )
-
-        size_mb = round(out_mp4.stat().st_size / (1024.0 * 1024.0), 2)
-        if on_progress is not None:
-            pct = 15 + int((seq_idx / max(1, total_count)) * 80)
-            enc_tag = cut_info["encoder"]
-            aac_note = "（已自动转 AAC 兼容封装）" if enc_tag == "copy+aac" else ""
-            on_progress(
-                "step4",
-                min(96, pct),
-                f"[{seq_idx}/{total_count}] 完成 #{rank:02d} ({size_mb:.2f}MB | {cut_info['elapsed_sec']}s | {enc_tag}){aac_note}",
-            )
-        exported_clips.append(
-            {
-                "rank": rank,
-                "score": score,
-                "title_zh": title_zh,
-                "start_sec": start_sec,
-                "end_sec": end_sec,
-                "start_str": item.get("start_str") or format_timestamp(start_sec),
-                "end_str": item.get("end_str") or format_timestamp(end_sec),
-                "duration_sec": round(end_sec - start_sec, 2),
-                "mp4_path": cut_info["mp4_path"],
-                "srt_path": str(out_srt.resolve()),
-                "srt_line_count": srt_count,
-                "subtitle_lang": subtitle_lang,
-                "lead_in_offset_sec": lead_in,
-                "encoder": cut_info["encoder"],
-                "burned_subtitles": cut_info["burned_subtitles"],
-                "size_mb": size_mb,
-                "elapsed_sec": cut_info["elapsed_sec"],
-            }
-        )
-
+    exported_clip_count = sum(1 for c in exported_clips if c.get("mp4_path"))
     manifest_path = out_dir / f"{stem}_clips_manifest.json"
     result: dict[str, Any] = {
         "video_path": str(resolved_video.resolve()),
         "highlights_json_path": str(highlights_path.resolve()),
         "output_dir": str(out_dir.resolve()),
         "mode": mode,
-        "subtitle_lang": subtitle_lang,
+        "subtitle_lang": norm_sub_mode,
         "show_title_banner": show_title_banner,
+        "only_reviewed": bool(only_reviewed),
         "fps": fps,
-        "selected_count": len(selected_items),
+        "chapters_count": len(chapters),
+        "selected_count": len(prepared_items),
         "exported_count": len(exported_clips),
+        "exported_clip_count": exported_clip_count,
+        "nle_item_count": len(prepared_items),
         "elapsed_sec": round(time.perf_counter() - total_t0, 2),
+        "fcpxml_path": str(fcpxml_path.resolve()),
+        "premiere_xml_path": str(premiere_xml_path.resolve()),
         "markers_csv_path": str(csv_path.resolve()),
         "markers_edl_path": str(edl_path.resolve()),
         "manifest_json_path": str(manifest_path.resolve()),
         "clips": exported_clips,
     }
 
-    manifest_path.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(manifest_path, result, indent=2)
     return result
 
 
@@ -1410,12 +1560,13 @@ def _parse_ranks_arg(ranks_str: str | None) -> list[int] | None:
 def _print_summary(result: dict[str, Any]) -> None:
     """在终端打印清晰的 Step 4 出片清单摘要。"""
     print("=" * 72)
-    print("Step 4 切片导出与专业时间线标记生成完成")
+    print("Step 4 切片导出与专业 NLE 时间线工程生成完成")
     print("=" * 72)
     print(f"原视频     : {result['video_path']}")
     print(
         f"导出模式   : {result['mode']} | 字幕语言 {result['subtitle_lang']} | "
-        f"帧率 {result['fps']} fps | 导出 {result['exported_count']} 条 | 总耗时 {result['elapsed_sec']} 秒"
+        f"帧率 {result['fps']} fps | OBS 章节 {result.get('chapters_count', 0)} 个 | "
+        f"导出 {result['exported_count']} 条 | 总耗时 {result['elapsed_sec']} 秒"
     )
     print("-" * 72)
 
@@ -1430,14 +1581,22 @@ def _print_summary(result: dict[str, Any]) -> None:
                 if clip.get("lead_in_offset_sec", 0.0) > 0
                 else ""
             )
+            score_disp = "手动" if clip.get("score") is None else f"{float(clip['score']):.1f}分"
             print(
-                f"#{clip['rank']:02d} [{clip['score']:.1f}分] {clip['start_str']}-{clip['end_str']} "
+                f"#{clip['rank']:02d} [{score_disp}] {clip['start_str']}-{clip['end_str']} "
                 f"({clip['duration_sec']:.1f}s | {clip['size_mb']:.2f}MB | {clip['encoder']} | {burn_tag}{offset_note})"
             )
-            print(f"    -> {Path(clip['mp4_path']).name}")
+            if clip.get("mp4_path"):
+                print(f"    -> {Path(clip['mp4_path']).name}")
+            elif clip.get("srt_path"):
+                print(f"    -> (NLE 工程模式) {Path(clip['srt_path']).name}")
 
     print("-" * 72)
     print(f"输出目录       : {result['output_dir']}")
+    if result.get("fcpxml_path"):
+        print(f"DaVinci/FCP    : {result['fcpxml_path']}")
+    if result.get("premiere_xml_path"):
+        print(f"Premiere XML   : {result['premiere_xml_path']}")
     print(f"达芬奇/Excel表 : {result['markers_csv_path']}")
     print(f"PR/达芬奇 EDL  : {result['markers_edl_path']}")
     print(f"切片汇总清单   : {result['manifest_json_path']}")
@@ -1447,7 +1606,7 @@ def _print_summary(result: dict[str, Any]) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。"""
     parser = argparse.ArgumentParser(
-        description="Step 4：按审片结果导出原画质无损切片、剪辑标记或双语竖屏短视频。"
+        description="Step 4：按审片结果导出专业 NLE 工程交付包（FCPXML / Premiere XML / EDL / CSV）、原画质无损切片或双语竖屏短视频。"
     )
     parser.add_argument(
         "highlights_json",
@@ -1470,20 +1629,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["lossless", "vertical", "landscape"],
+        choices=["lossless", "vertical", "landscape", "nle_only"],
         default="lossless",
-        help="导出模式：lossless 原画无损快切，vertical 9:16模糊背景竖屏，landscape 横屏重编码（默认：lossless）",
+        help="导出模式：nle_only 极速仅导出 NLE 工程包+SRT，lossless 原画无损快切，vertical 9:16模糊背景竖屏，landscape 横屏重编码（默认：lossless）",
     )
     parser.add_argument(
         "--subtitle-lang",
-        choices=["bilingual", "bilingual_rev", "target", "source", "zh", "en"],
+        choices=sorted(VALID_SUBTITLE_LANG_MODES),
         default="bilingual",
-        help="字幕语言模式：bilingual 双语(译文上/原文下)，bilingual_rev 双语(原文上/译文下)，target 仅译文，source 仅原文，兼容 zh/en（默认：bilingual）",
+        help="字幕语言模式：bilingual / bilingual_src_top / target_only / source_only / none（兼容 bilingual_rev / target / source / zh_only / en_only / zh / en）",
+    )
+    parser.add_argument(
+        "--show-title-banner",
+        action="store_true",
+        help="在竖屏模式顶部显式开启标题条（默认关闭，保持画面干净克制）",
     )
     parser.add_argument(
         "--no-title-banner",
         action="store_true",
-        help="关闭竖屏顶部的中文爆款标题条",
+        help="显式关闭竖屏顶部标题条（兼容旧命令，现已默认关闭）",
+    )
+    parser.add_argument(
+        "--only-reviewed",
+        action="store_true",
+        help="仅导出已标记为「已人工校对」(review_status=reviewed) 且已勾选的高光片段",
     )
     parser.add_argument(
         "--no-burn-subtitles",
@@ -1534,6 +1703,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         parsed_ranks = _parse_ranks_arg(args.ranks)
+        show_banner = bool(args.show_title_banner and not args.no_title_banner)
         result = render_highlight_clips(
             highlights_json_path=args.highlights_json,
             video_path=args.video_path,
@@ -1542,12 +1712,13 @@ def main(argv: list[str] | None = None) -> int:
             mode=args.mode,
             burn_subtitles=not args.no_burn_subtitles,
             subtitle_lang=args.subtitle_lang,
-            show_title_banner=not args.no_title_banner,
+            show_title_banner=show_banner,
             encoder=args.encoder,
             width=args.width,
             height=args.height,
             limit=args.limit,
             ranks=parsed_ranks,
+            only_reviewed=bool(args.only_reviewed),
         )
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"[错误] {exc}", file=sys.stderr)

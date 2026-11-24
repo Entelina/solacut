@@ -1,12 +1,41 @@
-# Solacut — 本地 NLE 游戏录屏高光切片与六语种母语精翻工作台
+# Solacut — Open-Source Local VOD Assistant Editor & 6-Language Localization Workbench
+**开源纯本地长录屏助理剪辑与六语种审校工作台（MIT License）**
 
-> 🌐 **官方网站**：[**https://solacut.com**](https://solacut.com)（便携包下载与 SHA-256 核验）｜📖 **新手必看**：[**《Solacut 操作手册 (USER_MANUAL.md)》**](./USER_MANUAL.md)（软件内按 `F1` 随时打开）｜🔒 [`SECURITY.md`](./SECURITY.md)｜📄 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)
+> 🌐 **Official Website / 官方网站**：[**https://solacut.com**](https://solacut.com)（Win64 免 Python 便携包下载与 SHA-256 核验）｜📖 **操作手册**：[**`USER_MANUAL.md`**](./USER_MANUAL.md)（软件内按 `F1` 随时打开）｜🔒 [`SECURITY.md`](./SECURITY.md)｜📄 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)
 
-一个纯本地起手的专业桌面级游戏录屏高光自动切片与类达芬奇审片工作台，将数小时直播通过「OBS 多音轨人声带通探测 + 多引擎语音识别 + 6 语种 22.8 万商用语料（可扩展至 60 万研究口语库）RAG 与三道零漏翻闭环 + 原生桌面 NLE 审片工作台（含媒体池虚拟文件夹分类）+ FFmpeg 无损/竖屏双语渲染」变成可交付的短视频成片与剪辑工程。
+Solacut 不是“黑盒无人值守的 AI 垃圾切片工厂（AI Slop Generator）”，而是一款遵循 **Human-in-the-Loop（人类掌舵）** 理念的纯本地桌面级 **助理剪辑师（Assistant Editor）与多语种字幕审校工作台**。
 
-## 最快捷使用：启动原生桌面审片工作台
+它将数小时游戏录屏或跨语种直播回放中最枯燥的前期体力活——**OBS 多音轨人声带通探测、内嵌 OBS 章节标记读取、Twitch/B站/YouTube 弹幕刷屏峰值雷达、全片逐字稿搜词定位、以及基于 22.8 万商用语料的 6×6 母语级双语初译**——全部留在你的本机完成，最后以 **`< 1s` 零转码导出原生 `FCPXML 1.10`（DaVinci Resolve / Final Cut Pro）与 `Premiere Pro XML` 时间线**，或经过人工 `Reviewed` 审校门禁后无损直切交付。
 
-直接运行内置桌面启动脚本，或在终端运行：
+---
+
+## 核心特性（Utility, Not Replacement）
+
+- **全 6 语种原生暗房界面（默认 English）**：支持 `English / 简体中文 / 日本語 / 한국어 / Русский / Español` 一键无刷新切换；采用 `pywebview` (Edge WebView2) 无边框桌面窗体，支持 `J/K/L` 8x 梭巡、`I/O` 设点、媒体池虚拟文件夹（Bin）与 5 色标签、100 步原子撤销栈及 43 项可检索快捷键。
+- **音轨 + OBS 章节 + 弹幕三轨高光雷达（零 API 消耗先行体检）**：
+  - 自动探测 OBS 多音轨并推荐纯人声麦轨，以纯 NumPy FFT 执行 `300~3400Hz` 人声带通滤波防爆炸枪声误报，同步标出 `>=15s` 的挂机死寂空白段（审片可开启 `Skip Air` 自动跳空，绝不破坏正常说话气口）；
+  - 原生提取 MP4/MKV 内嵌 **OBS Chapter Markers（章节标记）** 并一键带入 Premiere / DaVinci XML；
+  - 支持导入 **TwitchDownloader JSON / B站 XML / YouTube Live Chat** 弹幕文件，基于本地 SQLite FTS5 绘制弹幕热度曲线与跨语种梗词（`OMEGALUL` / `草` / `ㅋㅋ` 等）峰值，精准捕捉无声神操作与冷面反讽。
+- **全片逐字稿搜词剪辑（Full Transcript Search）与 ±30s 上下文核查**：
+  - 即使完全不使用 AI 选片，也可在 `Transcript` 面板直接搜词跳播、勾选任意连续台词一键建片段（纯免费本地文本剪辑工作流）；
+  - 审校任意高光时可一键展开 **`±30s Source Context`（前后 30 秒完整原片上下文）**，杜绝断章取义与反讽误译。
+- **6×6 母语级字幕系统与 `Draft → Reviewed` 人工品控门禁**：
+  - 中/英/日/韩/俄/西任意源语与目标语自由互译，内置 **228,210 条纯商用无限制平行语料**（可按需本地扩展至 60 万口语研究库）+ 三道零漏翻闭环；监视器 `CC` 菜单支持译上原下、原上译下、单语、关闭 5 种实时预览；
+  - AI 初稿默认标为 `Draft` 并自动标注高黑话密度/回退复核提示，人工核验后按 `R` 标为绿色 `✓ Reviewed`，交付页默认开启 **`Only Reviewed`（仅导出已人工审校片段）** 护栏。
+- **专业 NLE 优先交付（不绑架主力剪辑软件）**：
+  - 默认 **`NLE XML` 极速模式（`< 1s` 零转码）**：直接生成严格符合 DTD 规范的 **`FCPXML 1.10` 双序列工程**（DaVinci Resolve / FCP）与 **`Premiere Pro FCP7 XML (xmeml v5)`**（完整保留双轨立体声、`masterclipid` 与全部 OBS 章节标记），以及 CMX 3600 EDL、DaVinci CSV 与对齐 `.srt`；
+  - 同时支持 **FFmpeg 原画无损直切**（自动补偿长 GOP 关键帧偏移防外挂字幕抢跑，支持 4K 原片代切）与可选的 9:16 竖屏 / 16:9 横屏双语 ASS 渲染（按语种自动匹配零缺字系统字体）。
+
+---
+
+## 最快捷上手
+
+### 方式一：Windows 64-bit 免 Python 便携包（推荐）
+前往 [**https://solacut.com**](https://solacut.com) 或 [GitHub Releases](https://github.com/Entelina/solacut/releases) 下载最新便携包，解压双击 **`Solacut.exe`** 即可运行。首次无 API Key 可直接在引导弹窗或顶栏 **`Help → Load 30s Demo Project`** 一键离线体验全流程。
+
+### 方式二：源码运行（Windows PowerShell · Python 3.11 + uv）
+
+> 为保证 `faster-whisper`、`ctranslate2` 与音视频/CUDA 预编译轮子稳定可用，工程锁定 **Python 3.11** 独立虚拟环境。
 
 ```powershell
 # 启动原生无边框桌面工作台（推荐）
@@ -16,152 +45,62 @@
 .\.venv\Scripts\python.exe src/desktop_app.py --browser
 ```
 
-启动后将打开原生暗房工作台：
-- 首次启动无 Key 可一键点击「体验 30 秒示例」零门槛体验完整审片、双语字幕修改与导出闭环；
-- 支持自动探测 OBS 多音轨并智能推荐纯人声麦轨，默认开启 300~3400Hz 人声带通防低频爆炸误报；
-- 支持任意源语种与译文语种自由搭配（中/英/日/韩/俄/西），内置媒体池虚拟文件夹自由分类、J/K/L/I/O 与 100 步原子撤销栈；
-- 一键导出公会无损包（附带 CMX 3600 EDL 与 DaVinci CSV 标记表）或 1080×1920 双语竖屏爆款成片。
+---
 
-## 模块化架构与命令行流水线
+## 模块化命令行流水线（供高级批处理与脚本集成）
 
-0. **`src/config.py` / `src/pipeline.py` / `src/web_app.py`（已上线）**：统一三层接口路由配置（`ASR_*` 语音识别 + `SCREEN_LLM_*` 粗筛 + `POLISH_LLM_*` 双语精修）、全阶段参数指纹感知断点续跑流水线与 FastAPI 图形化工作台服务。
-1. **`src/step1_audio.py`（已完成）**：支持 `FFprobe` OBS 多音轨自动探测与指定选轨提取 16kHz 全频段 WAV（无损保留清辅音），并在测算高能峰值时用纯 `numpy` FFT（Parseval 定理）执行 300~3400Hz 核心人声频段带通，滤除低频爆炸/枪炮与 BGM 干扰。
-2. **`src/asr_providers.py` / `src/step2_asr.py`（已完成）**：独立语音识别引擎层，默认走 **DeepSeek 云端 ASR（`POST /v1/tools/asr`）**（配合内存级轻声响度归一化 + 敏感 Silero VAD 精确切句，既捞回小声吐槽又彻底消灭僵尸长字幕），并可随时一键切换为 **本地 RTX 增强版 `faster-whisper`（默认 `large-v3-turbo` + 调优 VAD + 热词表）** 或 **通用 OpenAI 兼容 `/audio/transcriptions`（Groq / OpenAI / 硅基流动）**。
-3. **`src/llm_client.py` / `src/step3_llm.py`（已完成）**：生产级 LLM 调度层（连接池复用、429/5xx 指数退避、思考开关与推理参数自适应、Token 账单统计）；默认采用 **`deepseek-flash`**（1M 上下文）按直播时长自适应精选高光，并并发执行「整句意群语义重组 + 听写纠错 + 字幕组地道本土化意译」。
-4. **`src/step4_cut.py`（已完成）**：调用 `FFmpeg` 切片，支持 `lossless` 原画无损快切（含长 GOP 关键帧偏移补偿对齐 SRT）、达芬奇/PR 时间线标记文件（CSV + EDL）、以及 `vertical`（9:16 模糊背景 + 顶部标题条 + ASS 分层双语字幕）/`landscape` 成片渲染。
+1. **Step 1 音频带通峰值与死寂段探测（`src/step1_audio.py`）**
+   ```powershell
+   # 查看 OBS 多音轨列表并自动推荐纯人声麦轨
+   .\.venv\Scripts\python.exe src/step1_audio.py input/obs_multitrack.mkv --list-streams
 
-## 为什么锁定 Python 3.11？
+   # 指定第 1 号人声麦轨执行 300~3400Hz 带通峰值与 >=15s 死寂段检测
+   .\.venv\Scripts\python.exe src/step1_audio.py input/obs_multitrack.mkv --audio-stream 1
+   ```
+2. **Step 2 多引擎语音转写（`src/step2_asr.py`）**
+   ```powershell
+   # 默认云端 DeepSeek ASR（含轻声局部响度归一化 + Silero VAD 精确切句）
+   .\.venv\Scripts\python.exe src/step2_asr.py output/obs_multitrack_audio_peaks.json
 
-系统里即使有更新的 Python（如 3.14），`faster-whisper`、`ctranslate2`、音视频与 CUDA 生态包通常在新版本刚发布时缺少预编译 wheel，直接安装极易报错编译失败。因此本项目通过 `uv` 显式锁定 **Python 3.11** 独立虚拟环境（`.venv`）。
+   # 或切换本地 RTX CUDA 离线 faster-whisper (large-v3-turbo)
+   .\.venv\Scripts\python.exe src/step2_asr.py output/obs_multitrack_audio_peaks.json --asr-provider local --asr-model large-v3-turbo
+   ```
+3. **Step 3 高光候选初筛与 6×6 双语初译（`src/step3_llm.py`）**
+   ```powershell
+   Copy-Item .env.example .env  # 填入 API Key（或在桌面工作台 Settings 面板保存）
+   .\.venv\Scripts\python.exe src/step3_llm.py output/obs_multitrack_transcript.json
+   ```
+4. **Step 4 导出 NLE 时间线工程 / 无损切片 / 多语种字幕（`src/step4_cut.py`）**
+   ```powershell
+   # 1. 极速零转码导出 DaVinci FCPXML 1.10 + Premiere XML + EDL + CSV + SRT（仅放行已人工审校片段）
+   .\.venv\Scripts\python.exe src/step4_cut.py output/obs_multitrack_highlights.json --mode nle_only --only-reviewed
 
-## 环境激活与使用（Windows PowerShell）
+   # 2. 原画无损快切（含长 GOP 关键帧偏移补偿 + 同步生成 FCPXML / Premiere XML）
+   .\.venv\Scripts\python.exe src/step4_cut.py output/obs_multitrack_highlights.json --mode lossless --only-reviewed
 
-进入项目根目录后，按需激活虚拟环境（也可以直接使用 `.venv\Scripts\python.exe` 运行）：
+   # 3. 可选 9:16 竖屏双语硬字幕成片（默认不加顶部标题横幅，保持画面克制干净）
+   .\.venv\Scripts\python.exe src/step4_cut.py output/obs_multitrack_highlights.json --mode vertical --subtitle-lang bilingual --only-reviewed
+   ```
+5. **批处理全流程（`src/pipeline.py`，仅自动生成审片清单与可选 NLE XML 工程，杜绝无人值守粗制滥造出片）**
+   ```powershell
+   .\.venv\Scripts\python.exe src/pipeline.py input/demo_highlight_30s.mp4 --output-dir output --export-nle-xml
+   ```
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
+---
 
-## 运行 Step 1：分析游戏录屏音频高光
+## 本地六语种语料库与版权合规分级
 
-将你的测试录屏放到 `input/` 目录，或直接传入视频绝对路径：
-
-```powershell
-.\.venv\Scripts\python.exe src/step1_audio.py input/你的游戏录屏.mp4
-
-# 先查看 OBS 多音轨视频包含哪些音轨（自动推荐纯人声麦轨）
-.\.venv\Scripts\python.exe src/step1_audio.py input/obs_multitrack.mkv --list-streams
-
-# 指定提取第 1 号纯人声麦轨进行分析（默认音轨 0，默认开启 300~3400Hz 人声带通）
-.\.venv\Scripts\python.exe src/step1_audio.py input/obs_multitrack.mkv --audio-stream 1
-```
-
-常用可选参数：
-- `--output-dir`：输出目录（默认 `output`）
-- `--list-streams`：仅探测并打印视频包含的全部音频轨道信息
-- `--audio-stream`：指定抽取视频的第几条音轨（`0` 起算，适合 OBS 多音轨单独选人声麦轨）
-- `--no-vocal-bandpass`：关闭默认的 `300~3400Hz` 人声带通滤波，改用全频段音量测算峰值
-- `--window-sec`：统计窗口秒数（默认 `1.0` 秒）
-- `--top-percent`：选取音量排名前百分之多少的片段作为高光候选（默认 `15.0`）
-- `--min-rms`：最低 RMS 音量硬底线，防止静音视频误报（默认 `0.01`）
-- `--merge-gap`：两个高音量区间间隔小于等于多少秒时自动合并（默认 `2.0`）
-- `--pad`：每个高光区间前后额外扩展缓冲秒数（默认 `1.0`）
-
-运行后会在 `output/` 下生成：
-- `<视频名>_16k.wav`：提取出的 16kHz 单声道音频（可直接给 Step 2 复用）
-- `<视频名>_audio_peaks.json`：高音量时间段列表与阈值详情
-
-## 运行 Step 2：提取带高音量标记的字幕稿（独立 ASR 引擎）
+便携发行包默认内置 **228,210 条**严格限定商用无限制许可（`MIT / CC BY 2.0 / CC BY-SA 4.0`）的六语种 SQLite FTS5 平行语料（无空格 CJK 语种采用原生 `trigram` 分词）及原创电竞/直播反直译词库；个人学习与非商业研究可在工作台「Glossary / 词库」页或通过命令行按需从官方镜像拉取扩展至 **600,000 条**口语索引（详见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)）：
 
 ```powershell
-# 1. 默认模式：走 DeepSeek 官方云端 ASR（/v1/tools/asr，配合轻声响度归一化 + 敏感 Silero VAD 精确切句）
-.\.venv\Scripts\python.exe src/step2_asr.py output/demo_stream_audio_peaks.json
-
-# 2. 切换为免费离线本地 RTX 增强版 Whisper（默认 large-v3-turbo，附带主播/游戏热词表）
-.\.venv\Scripts\python.exe src/step2_asr.py output/demo_stream_audio_peaks.json --asr-provider local --asr-model large-v3-turbo --hotwords "Where Winds Meet, Elden Ring, KEKW"
-
-# 3. 切换为 OpenAI 兼容云端 ASR（如 Groq / OpenAI / 硅基流动），或整场 full 全量转写
-.\.venv\Scripts\python.exe src/step2_asr.py output/demo_stream_audio_peaks.json --asr-provider openai_compatible --mode full
-```
-
-运行后会在 `output/` 下生成：
-- `<视频名>_transcript.json`：包含候选窗口、时间戳字幕、云端计费时长及 `is_high_volume` / `peak_rms` 标记的结构化结果
-- `<视频名>_transcript.txt`：可直接阅读和交给 Step 3 大模型分析的带标签台词稿
-
-## 运行 Step 3：大模型自适应粗筛与生成中文审片清单
-
-1. 先复制 `.env.example` 为 `.env`，填入你的 DeepSeek / OpenAI 兼容密钥（或直接在工作台右上角「设置与外观」保存；单厂商 DeepSeek 只需填 1 个 Key 即可同时驱动云端 ASR + `deepseek-flash`）：
-
-```powershell
-Copy-Item .env.example .env
-```
-
-2. 运行 Step 3（默认使用 `deepseek-flash`，支持通过 `--polish-model` 独立指定双语精修模型）：
-
-```powershell
-.\.venv\Scripts\python.exe src/step3_llm.py output/demo_stream_transcript.json
-
-# 仅对已有的 *_highlights.json 重新按整句意群与地道意译刷新双语字幕（保留既有勾选状态与起止时间）
-.\.venv\Scripts\python.exe src/step3_llm.py output/demo_stream_transcript.json --translate-only --hotwords "Where Winds Meet, Elden Ring, KEKW"
-```
-
-如需手动覆盖条数或时长区间：
-
-```powershell
-.\.venv\Scripts\python.exe src/step3_llm.py output/demo_stream_transcript.json --top-k 12 --min-clip-sec 20 --max-clip-sec 60
-```
-
-运行后会在 `output/` 下生成：
-- `<视频名>_highlights.json`：供 Step 4 切片使用的结构化方案（每条默认 `"selected": true`，审片时把不要的改成 `false` 即可跳过）
-- `<视频名>_review.md`：给剪辑师看的中文速览审片清单（含中英标题、一句话中文梗概、入选理由及原文台词摘录）
-
-## 运行 Step 4：导出无损切片 / 时间线标记 / 竖屏烧录成片
-
-```powershell
-# 1. 公会无损工作流（默认）：原画快切 + 同名 .srt 字幕 + 达芬奇/PR 标记表（CSV + EDL）
-.\.venv\Scripts\python.exe src/step4_cut.py output/demo_stream_highlights.json
-
-# 2. 先试切前 2 条快速验货
-.\.venv\Scripts\python.exe src/step4_cut.py output/demo_stream_highlights.json --mode lossless --limit 2
-
-# 3. 个人博主一键竖屏成片（1080x1920 高斯模糊背景 + 顶部标题条 + 双语 ASS 硬字幕），仅切第 2 名
-.\.venv\Scripts\python.exe src/step4_cut.py output/demo_stream_highlights.json --mode vertical --ranks 2 --subtitle-lang bilingual
-```
-
-支持的核心模式与参数：
-- `--mode lossless` / `vertical` / `landscape`：无损原画快切 / 9:16 模糊背景竖屏 / 横屏重编码
-- `--subtitle-lang bilingual` / `bilingual_rev` / `target` / `source`：译上原下双语 / 原上译下双语 / 仅译文 / 仅原文
-- `--no-title-banner`：关闭竖屏顶部的爆款标题条
-- `--ranks 1,2,5` 与 `--limit N`：按排名精选或限制导出数量
-- `--video-path`：如果分析的是低画质代理视频，可在这里无缝替换为 4K 原片输出
-- `--no-burn-subtitles`：关闭竖屏/横屏重编码时的画面硬字幕烧录，仅保留外挂 `.srt`
-
-## 一键命令行全流程（批处理）
-
-```powershell
-.\.venv\Scripts\python.exe src/pipeline.py input/demo_stream.mp4 --output-dir output
-
-# 指定使用 OBS 第 1 号麦轨，或附加 --no-vocal-bandpass 改用全频段峰值检测
-.\.venv\Scripts\python.exe src/pipeline.py input/ --output-dir output --audio-stream 1
-```
-
-## 本地多语种专家语料库与零漏翻翻译闭环（6 大语种 60 万级）
-
-系统内置 **60 万条**经严格去噪与口语亲和度精选的开源平行语料 SQLite FTS5 索引（覆盖 **`en_zh` 英→中、`zh_en` 中→母语英、`ja_zh` 日→中、`ko_zh` 韩→中、`ru_zh` 俄→中、`es_zh` 西→中** 六大核心语种，每语种对等拉齐 **100,000 条**，对无空格 CJK 语种采用原生 `trigram` 分词），并配套原创 MIT 商用无风险游戏/电竞/VTuber 专家术语库、ASR 同音误听纠偏库与母语反直译红线金库（完整来源与许可清单见 `data/corpus/SOURCES.md`）。
-
-Step 3 双语精修内置三道防线：毫秒级多语种 RAG 专家参考卡注入 + 源语种感知严苛漏翻质检（堵死未译英文、日语假名残留、韩语谚文残留、俄语西里尔残留及时间轴跳句黑洞） + 手术刀级定点补翻闭环，确保出品贴近真人母语字幕组且 0 漏翻。
-
-如需重建、更新或按严格商用无限制许可（`--commercial-only`）重新构建语料：
-
-```powershell
-# 一键拉取/刷新全部 6 大语种（英/中/日/韩/俄/西）并拉齐至 100,000 条/语种
-.\.venv\Scripts\python.exe src/corpus_builder.py --lang-pair all
-
-# 严格仅收录商用无限制许可（MIT / CC BY 2.0 / CC BY-SA 4.0）数据源
+# 严格仅构建商用无限制许可语料（打包默认模式）
 .\.venv\Scripts\python.exe src/corpus_builder.py --lang-pair all --commercial-only
+
+# 本地按需构建全量 60 万条个人研究口语索引
+.\.venv\Scripts\python.exe src/corpus_builder.py --lang-pair all
 ```
 
-在 Web 工作台右上角「设置」->「专家双语语料库与公会专属词库」中，可随时添加公会/主播专属译名与 ASR 误听映射，保存后下一次翻译立即生效。
+---
 
 ## 运行自动化测试
 

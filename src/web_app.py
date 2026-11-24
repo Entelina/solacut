@@ -18,8 +18,10 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import math
 import mimetypes
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -48,6 +50,14 @@ _RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", _PROJECT_ROOT)) if _IS_FROZEN els
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from src.chat_radar import (  # noqa: E402
+    analyze_chat_spikes,
+    fuse_audio_and_chat_peaks,
+    parse_chat_file,
+    save_chat_messages_db,
+    search_chat_keywords,
+    search_chat_messages_db,
+)
 from src.config import (  # noqa: E402
     mask_secret as _mask_secret,
     read_workbench_config as _read_workbench_config_from_paths,
@@ -60,6 +70,7 @@ from src.corpus_rag import (  # noqa: E402
     load_user_glossary,
     save_user_glossary,
 )
+from src.nle_export import extract_video_chapters  # noqa: E402
 from src.pipeline import (  # noqa: E402
     SUPPORTED_VIDEO_EXTS,
     get_or_compute_diagnostics,
@@ -77,9 +88,32 @@ from src.step1_audio import (  # noqa: E402
     sample_wav_waveform,
 )
 from src.step3_llm import (  # noqa: E402
+    VALID_REVIEW_STATUSES,
+    atomic_write_json,
+    compute_review_flags,
     enrich_highlights_with_bilingual_subtitles,
     export_review_markdown,
+    get_highlights_file_lock,
+    normalize_review_status,
 )
+from src.step4_cut import VALID_EXPORT_MODES, normalize_subtitle_lang_mode  # noqa: E402
+
+_SUPPORTED_SUBTITLE_LANGS: frozenset[str] = frozenset({"en", "zh", "ja", "ko", "ru", "es"})
+_SUPPORTED_CHAT_EXTS: frozenset[str] = frozenset({".json", ".jsonl", ".xml"})
+_MAX_TRANSCRIPT_SEGMENTS = 5000
+
+
+def _validate_optional_lang_code(raw: str | None, field_name: str = "language") -> str | None:
+    """校验可选语种参数，放行 6 语种（en/zh/ja/ko/ru/es）及 auto/空值。"""
+    cleaned = (raw or "").strip().lower()
+    if not cleaned or cleaned == "auto":
+        return None
+    if cleaned not in _SUPPORTED_SUBTITLE_LANGS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的语种参数 {field_name}={raw}，仅支持 en/zh/ja/ko/ru/es 或 auto",
+        )
+    return cleaned
 
 def _resolve_resource_dir(rel: str) -> Path:
     p1 = _PROJECT_ROOT / rel
@@ -288,6 +322,20 @@ class FolderReq(BaseModel):
 class BrowseFileReq(BaseModel):
     initial_dir: str | None = None
     title: str = "选择视频文件"
+    kind: str = "video"
+
+
+class ChatImportReq(BaseModel):
+    stem: str
+    chat_path: str
+    output_dir: str | None = None
+    bucket_sec: float = Field(default=5.0, ge=1.0, le=120.0, allow_inf_nan=False)
+
+
+class ManualHighlightsCreateReq(BaseModel):
+    video_path: str
+    output_dir: str | None = None
+    items: list[dict[str, Any]] = Field(min_length=1, max_length=200)
 
 
 class OpenFolderReq(BaseModel):
@@ -302,15 +350,15 @@ class HighlightsUpdateReq(BaseModel):
 class AnalyzeTaskReq(BaseModel):
     video_paths: list[str] = Field(min_length=1)
     output_dir: str
-    top_percent: float = 15.0
+    top_percent: float = Field(default=15.0, gt=0.0, le=100.0, allow_inf_nan=False)
     asr_provider: str | None = None
     asr_mode: str = "peaks"
-    top_k_peaks: int = 20
+    top_k_peaks: int = Field(default=20, ge=1, le=500)
     model_size: str | None = None
     asr_model: str | None = None
     hotwords: str | None = None
     normalize_audio: bool = True
-    vad_threshold: float = 0.30
+    vad_threshold: float = Field(default=0.30, ge=0.0, le=1.0, allow_inf_nan=False)
     language: str | None = None
     target_language: str | None = None
     top_k_highlights: int | None = None
@@ -342,8 +390,10 @@ class ExportTaskReq(BaseModel):
     output_dir: str | None = None
     mode: str = "lossless"
     subtitle_lang: str = "bilingual"
-    show_title_banner: bool = True
+    subtitle_mode: str | None = None
+    show_title_banner: bool = False
     burn_subtitles: bool = True
+    only_reviewed: bool = False
     encoder: str = "auto"
     ranks: list[int] | None = None
 
@@ -351,7 +401,7 @@ class ExportTaskReq(BaseModel):
 class DiagnoseTaskReq(BaseModel):
     video_paths: list[str] = Field(min_length=1)
     output_dir: str
-    top_percent: float = 15.0
+    top_percent: float = Field(default=15.0, gt=0.0, le=100.0, allow_inf_nan=False)
     audio_stream: int = Field(default=0, ge=0)
     vocal_bandpass: bool = True
     force_rerun: bool = False
@@ -409,20 +459,95 @@ def _is_same_local_origin(origin_header: str, request_host_header: str) -> bool:
     return True
 
 
-def _reject_unc_path(raw_path: str | None) -> None:
-    """拒绝 UNC 网络路径与 NT 设备路径（含混合斜杠 `/\\host\\share`），防止 SMB NTLM 凭据泄露。"""
+_WINDOWS_RESERVED_DEVICE_NAMES: frozenset[str] = frozenset(
+    {
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        *(f"com{i}" for i in range(1, 10)),
+        *(f"lpt{i}" for i in range(1, 10)),
+    }
+)
+_CTRL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]+")
+
+# 服务端内存白名单：仅记录用户通过系统原生对话框 /api/browse-file 显式选中的文件路径，
+# 既 100% 支持读取任意盘符 4K 原片/弹幕文件，又彻底封死任意磁盘路径探测漏洞
+_USER_AUTHORIZED_FILES: set[str] = set()
+_AUTHORIZED_FILES_LOCK = threading.Lock()
+_CHAT_LOCKS_GUARD = threading.Lock()
+_CHAT_STEM_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _authorize_user_file(path: Path | str) -> None:
+    """将用户经系统原生文件框显式选中的本地路径加入服务端内存授权白名单。"""
+    try:
+        key = os.path.normcase(str(Path(path).resolve()))
+    except (OSError, ValueError):
+        return
+    with _AUTHORIZED_FILES_LOCK:
+        if len(_USER_AUTHORIZED_FILES) >= 1024:
+            _USER_AUTHORIZED_FILES.clear()
+        _USER_AUTHORIZED_FILES.add(key)
+
+
+def _is_user_authorized_file(path: Path) -> bool:
+    """判断路径是否已通过 /api/browse-file 显式授权。"""
+    try:
+        key = os.path.normcase(str(path.resolve()))
+    except (OSError, ValueError):
+        return False
+    with _AUTHORIZED_FILES_LOCK:
+        return key in _USER_AUTHORIZED_FILES
+
+
+def _get_chat_stem_lock(out_dir: Path, stem: str) -> threading.Lock:
+    """获取按 (output_dir, stem) 隔离的弹幕导入互斥锁，防并发导入撕裂 DB/JSON。"""
+    key = os.path.normcase(str((out_dir / stem).resolve()))
+    with _CHAT_LOCKS_GUARD:
+        lock = _CHAT_STEM_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _CHAT_STEM_LOCKS[key] = lock
+        return lock
+
+
+def _is_windows_reserved_name(segment: str) -> bool:
+    """检测单个文件名/目录分量是否命中 Windows 保留设备名（含 CON.json / NUL.txt 等扩展名形式）。"""
+    cleaned = (segment or "").strip().rstrip(". ")
+    if not cleaned:
+        return False
+    base = cleaned.split(".", 1)[0].rstrip(". ").lower()
+    return base in _WINDOWS_RESERVED_DEVICE_NAMES
+
+
+def _reject_unsafe_path(raw_path: str | None) -> None:
+    """强约束路径守卫：拦截空字节、UNC、`\\\\?\\`、`\\??\\` 与 Windows 保留设备名（含扩展名形式）。"""
     cleaned = (raw_path or "").strip()
     if not cleaned:
         return
     if "\x00" in cleaned:
         raise HTTPException(status_code=400, detail="安全限制：路径包含非法空字节")
     norm = cleaned.replace("/", "\\")
-    if norm.startswith("\\\\") or norm.startswith("\\??\\"):
-        raise HTTPException(status_code=400, detail="安全限制：不允许访问网络 UNC 或设备路径")
+    if norm.startswith("\\\\") or norm.startswith("\\??\\") or norm.startswith("\\\\?\\") or norm.startswith("\\\\.\\"):
+        raise HTTPException(status_code=400, detail="安全限制：不允许访问网络 UNC 或系统设备路径")
+    # 检查路径每个分量是否命中 Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9 及其带后缀形式）
+    for part in norm.split("\\"):
+        if not part or (len(part) == 2 and part[1] == ":" and part[0].isalpha()):
+            continue
+        if _is_windows_reserved_name(part):
+            raise HTTPException(
+                status_code=400,
+                detail=f"安全限制：路径包含 Windows 保留设备名 '{part}'，已拒绝访问",
+            )
+
+
+# 兼容历史调用别名
+_reject_unc_path = _reject_unsafe_path
 
 
 def _validate_safe_stem(stem: str) -> str:
-    """校验视频 stem 仅允许纯文件名片段，严禁路径分隔符、盘符或 `..` 穿越。"""
+    """校验视频 stem 仅允许纯文件名片段，严禁路径分隔符、盘符、`..` 穿越与 Windows 保留设备名。"""
     cleaned = (stem or "").strip()
     if (
         not cleaned
@@ -432,29 +557,257 @@ def _validate_safe_stem(stem: str) -> str:
         or ":" in cleaned
         or "\x00" in cleaned
         or ".." in cleaned
+        or _is_windows_reserved_name(cleaned)
     ):
         raise HTTPException(status_code=400, detail="安全限制：非法的视频标识 stem")
     return cleaned
 
 
-def _validate_highlights_json_path(raw_path: str) -> Path:
-    """校验高光方案 JSON 路径必须为本地存在的 `*_highlights.json` 文件，防止覆写任意系统/配置 JSON。"""
-    _reject_unc_path(raw_path)
-    p = Path(raw_path)
-    if not p.name.lower().endswith("_highlights.json"):
-        raise HTTPException(status_code=400, detail="安全限制：仅允许读写 *_highlights.json 高光方案文件")
-    if not p.is_file():
-        raise HTTPException(status_code=404, detail=f"找不到高光 JSON 文件：{p}")
-    return p
-
-
 def _is_path_within(child: Path, parent: Path) -> bool:
-    """安全判断 child 是否位于 parent 目录或其子目录下。"""
+    """安全判断 child（解开所有符号链接后）是否严格位于 parent 目录或其子目录下。"""
     try:
         child.resolve().relative_to(parent.resolve())
         return True
-    except ValueError:
+    except (OSError, ValueError):
         return False
+
+
+def _has_symlink_escape(raw_target: Path, allowed_roots: list[Path]) -> bool:
+    """检测路径自身或祖先中是否存在指向允许根目录之外的符号链接。"""
+    try:
+        resolved = raw_target.resolve()
+    except (OSError, ValueError):
+        return True
+    if not any(_is_path_within(resolved, root) for root in allowed_roots):
+        return True
+    # 进一步检查路径本身若为 symlink，解析后仍必须留在允许根目录内
+    cur = raw_target
+    for _ in range(32):
+        if cur.is_symlink():
+            if not any(_is_path_within(cur.resolve(), root) for root in allowed_roots):
+                return True
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return False
+
+
+def _get_allowed_write_roots(cfg: dict[str, Any]) -> list[Path]:
+    """返回所有允许写入的工作区根目录（仅限已配置 output_dir 与 _PROJECT_ROOT）。"""
+    roots = [_PROJECT_ROOT.resolve()]
+    cfg_out = str(cfg.get("output_dir") or "").strip()
+    if cfg_out:
+        try:
+            roots.append(Path(cfg_out).resolve())
+        except (OSError, ValueError):
+            pass
+    return roots
+
+
+def _get_allowed_read_roots(cfg: dict[str, Any]) -> list[Path]:
+    """返回所有允许读取的工作区根目录（input_dir / output_dir / _PROJECT_ROOT）。"""
+    roots = _get_allowed_write_roots(cfg)
+    cfg_in = str(cfg.get("input_dir") or "").strip()
+    if cfg_in:
+        try:
+            roots.append(Path(cfg_in).resolve())
+        except (OSError, ValueError):
+            pass
+    return roots
+
+
+def _resolve_allowed_output_dir(
+    raw_dir: str | None,
+    *,
+    cfg: dict[str, Any] | None = None,
+    create: bool = False,
+) -> Path:
+    """校验并返回允许写入的输出目录，禁止任意盘符 mkdir/覆写与符号链接穿越。"""
+    _reject_unsafe_path(raw_dir)
+    active_cfg = cfg if cfg is not None else _read_workbench_config()
+    target_str = (raw_dir or "").strip() or str(active_cfg.get("output_dir") or (_PROJECT_ROOT / "output"))
+    _reject_unsafe_path(target_str)
+
+    raw_target = Path(target_str)
+    allowed_roots = _get_allowed_write_roots(active_cfg)
+    if _has_symlink_escape(raw_target, allowed_roots):
+        raise HTTPException(
+            status_code=403,
+            detail="安全限制：输出目录必须位于已配置的工作区 output_dir 或项目目录内，已拒绝跨目录写入",
+        )
+    resolved = raw_target.resolve()
+    if resolved.exists() and not resolved.is_dir():
+        raise HTTPException(status_code=400, detail="安全限制：输出目录路径指向了一个已存在的普通文件")
+    if create:
+        resolved.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def _resolve_allowed_input_dir(
+    raw_dir: str | None,
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> Path:
+    """校验并返回允许扫描的输入目录（仅限已配置 input_dir / output_dir / _PROJECT_ROOT 内）。"""
+    _reject_unsafe_path(raw_dir)
+    active_cfg = cfg if cfg is not None else _read_workbench_config()
+    target_str = (raw_dir or "").strip() or str(active_cfg.get("input_dir") or (_PROJECT_ROOT / "input"))
+    _reject_unsafe_path(target_str)
+
+    raw_target = Path(target_str)
+    allowed_roots = _get_allowed_read_roots(active_cfg)
+    if _has_symlink_escape(raw_target, allowed_roots):
+        raise HTTPException(
+            status_code=403,
+            detail="安全限制：仅允许访问已配置工作区目录（input_dir / output_dir / 项目目录）",
+        )
+    return raw_target.resolve()
+
+
+def _resolve_allowed_read_path(
+    raw_path: str,
+    allowed_exts: frozenset[str],
+    *,
+    cfg: dict[str, Any] | None = None,
+    bad_ext_status: int = 404,
+) -> Path:
+    """校验并返回允许读取的文件路径：仅放行已配置工作区或经 /api/browse-file 显式授权的文件。"""
+    _reject_unsafe_path(raw_path)
+    cleaned = (raw_path or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="文件路径不能为空")
+
+    raw_target = Path(cleaned)
+    ext = raw_target.suffix.lower()
+    if bad_ext_status == 400 and ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"安全限制：不支持的文件格式（当前：{ext or '无扩展名'}）",
+        )
+
+    active_cfg = cfg if cfg is not None else _read_workbench_config()
+    allowed_roots = _get_allowed_read_roots(active_cfg)
+    try:
+        resolved = raw_target.resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="非法的文件路径") from exc
+
+    in_workspace = not _has_symlink_escape(raw_target, allowed_roots)
+    authorized = _is_user_authorized_file(resolved)
+    if not in_workspace and not authorized:
+        raise HTTPException(
+            status_code=403,
+            detail="安全限制：仅允许访问工作区目录内或通过系统文件选择框显式授权的文件",
+        )
+
+    if ext not in allowed_exts:
+        raise HTTPException(status_code=bad_ext_status, detail="找不到有效格式的受支持文件")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail=f"找不到指定文件：{resolved.name}")
+    return resolved
+
+
+def _validate_highlights_json_path(
+    raw_path: str,
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> Path:
+    """校验高光方案 JSON 路径必须位于允许输出目录内且以 `*_highlights.json` 结尾。"""
+    _reject_unsafe_path(raw_path)
+    raw_p = Path(raw_path)
+    if not raw_p.name.lower().endswith("_highlights.json"):
+        raise HTTPException(status_code=400, detail="安全限制：仅允许读写 *_highlights.json 高光方案文件")
+    active_cfg = cfg if cfg is not None else _read_workbench_config()
+    allowed_roots = _get_allowed_write_roots(active_cfg)
+    if _has_symlink_escape(raw_p, allowed_roots):
+        raise HTTPException(
+            status_code=403,
+            detail="安全限制：高光方案文件必须位于已配置的工作区 output_dir 或项目目录内",
+        )
+    resolved = raw_p.resolve()
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail=f"找不到高光 JSON 文件：{resolved}")
+    return resolved
+
+
+def _require_finite_float(value: Any, field_name: str) -> float:
+    """严格解析有限浮点数，拦截 NaN / Infinity / 非数字并抛出 HTTP 400。"""
+    if isinstance(value, bool):
+        raise HTTPException(status_code=400, detail=f"参数 {field_name} 必须为有限数字")
+    try:
+        num = float(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"参数 {field_name} 必须为有限数字") from exc
+    if not math.isfinite(num):
+        raise HTTPException(status_code=400, detail=f"参数 {field_name} 不允许为 NaN 或 Infinity")
+    return num
+
+
+def _sanitize_client_subtitles(
+    raw_subs: list[Any],
+    *,
+    clip_start_sec: float,
+    clip_end_sec: float,
+    is_same_lang: bool,
+    is_zh_src: bool,
+) -> list[dict[str, Any]]:
+    """严格清洗并校验客户端提交的手动字幕数组（限条数、限字长、有限时间轴、剥控制符）。"""
+    if len(raw_subs) > 500:
+        raise HTTPException(status_code=400, detail="单条片段最多允许提交 500 条字幕")
+
+    cleaned: list[dict[str, Any]] = []
+    for idx, row in enumerate(raw_subs, start=1):
+        if not isinstance(row, dict):
+            raise HTTPException(status_code=400, detail=f"第 {idx} 条字幕格式必须是对象")
+        s_val = _require_finite_float(row.get("start_sec", clip_start_sec), f"subtitles[{idx}].start_sec")
+        e_val = _require_finite_float(row.get("end_sec", clip_end_sec), f"subtitles[{idx}].end_sec")
+        s_clip = round(max(0.0, s_val), 2)
+        e_clip = round(max(0.0, e_val), 2)
+        if e_clip <= s_clip:
+            raise HTTPException(status_code=400, detail=f"第 {idx} 条字幕结束时间必须大于开始时间")
+
+        def _clean_sub_text(val: Any) -> str:
+            if val is None:
+                return ""
+            return _CTRL_CHARS_RE.sub(" ", str(val)).strip()[:500]
+
+        t_orig = _clean_sub_text(row.get("text_orig") or row.get("text"))
+        t_src = _clean_sub_text(row.get("text_src"))
+        t_tgt = _clean_sub_text(row.get("text_tgt"))
+        t_zh = _clean_sub_text(row.get("text_zh"))
+        t_en = _clean_sub_text(row.get("text_en"))
+
+        if not (t_orig or t_src or t_tgt or t_zh or t_en):
+            continue
+
+        if not t_src:
+            t_src = t_orig or (t_zh if is_zh_src else t_en)
+        if not t_orig:
+            t_orig = t_src or t_tgt
+        if is_same_lang:
+            unified = t_tgt or t_src or t_orig
+            t_src = unified
+            t_tgt = unified
+            t_zh = unified
+            t_en = unified
+        else:
+            if not t_zh and is_zh_src:
+                t_zh = t_src
+            if not t_en and not is_zh_src:
+                t_en = t_src
+
+        cleaned.append(
+            {
+                "start_sec": s_clip,
+                "end_sec": e_clip,
+                "text_orig": t_orig,
+                "text_src": t_src,
+                "text_tgt": t_tgt,
+                "text_zh": t_zh,
+                "text_en": t_en,
+            }
+        )
+    return cleaned
 
 
 # 生产态关闭自动暴露的 Swagger/OpenAPI 交互文档，减小本地攻击面
@@ -591,12 +944,14 @@ def api_save_media_bins(req: MediaBinsUpdateReq) -> dict[str, Any]:
         if not fid or not name or fid in seen_ids:
             continue
         seen_ids.add(fid)
+        raw_created = item.get("created_at")
+        created_ts = _require_finite_float(raw_created, "folders.created_at") if raw_created is not None else time.time()
         clean_folders.append(
             {
                 "id": fid,
                 "name": name,
                 "color": color,
-                "created_at": float(item.get("created_at") or time.time()),
+                "created_at": created_ts,
             }
         )
 
@@ -621,13 +976,7 @@ def api_save_media_bins(req: MediaBinsUpdateReq) -> dict[str, Any]:
         "assignments": clean_assignments,
         "tags": clean_tags,
     }
-    tmp_path = _MEDIA_BINS_PATH.with_name(f".media_bins.{uuid.uuid4().hex[:8]}.tmp")
-    try:
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp_path, _MEDIA_BINS_PATH)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+    atomic_write_json(_MEDIA_BINS_PATH, payload, indent=2)
     return {"ok": True, **payload}
 
 
@@ -750,7 +1099,7 @@ def api_load_demo_project() -> dict[str, Any]:
         if "review_md_path" in payload:
             payload["review_md_path"] = str((out_dir / f"{stem}_review.md").resolve())
         dst_j = out_dir / f"{stem}{suffix}"
-        dst_j.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(dst_j, payload, indent=2)
 
     return {
         "ok": True,
@@ -767,9 +1116,15 @@ def update_config(req: ConfigUpdateReq) -> dict[str, Any]:
     new_in = req.input_dir.strip() if req.input_dir is not None else current["input_dir"]
     new_out = req.output_dir.strip() if req.output_dir is not None else current["output_dir"]
     if new_in:
-        _reject_unc_path(new_in)
+        _reject_unsafe_path(new_in)
+        in_p = Path(new_in)
+        if in_p.exists() and not in_p.is_dir():
+            raise HTTPException(status_code=400, detail="输入目录路径不能指向已存在的普通文件")
     if new_out:
-        _reject_unc_path(new_out)
+        _reject_unsafe_path(new_out)
+        out_p = Path(new_out)
+        if out_p.exists() and not out_p.is_dir():
+            raise HTTPException(status_code=400, detail="输出目录路径不能指向已存在的普通文件")
 
     env_updates: dict[str, str | None] = {
         "OPENAI_API_KEY": req.api_key,
@@ -800,21 +1155,19 @@ def update_config(req: ConfigUpdateReq) -> dict[str, Any]:
     if new_out:
         Path(new_out).mkdir(parents=True, exist_ok=True)
 
-    _CONFIG_PATH.write_text(
-        json.dumps(
-            {"input_dir": new_in, "output_dir": new_out},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    atomic_write_json(
+        _CONFIG_PATH,
+        {"input_dir": new_in, "output_dir": new_out},
+        indent=2,
     )
 
     return _read_workbench_config()
 
 
-def _run_tk_file_dialog(dialog_cb: Any) -> str | None:
-    """在独立线程并串行互斥下弹出置顶系统选择框，避免 Tcl 跨线程崩溃或被无边框窗口遮挡。"""
-    if not _FILE_DIALOG_LOCK.acquire(blocking=False):
+def _run_tk_file_dialog(dialog_cb: Any, *, timeout_sec: float = 180.0) -> str | None:
+    """在独立线程并串行互斥下弹出置顶系统选择框；超时若线程仍存活绝不提前释放锁，防并发炸毁 Tcl。"""
+    dialog_lock = _FILE_DIALOG_LOCK
+    if not dialog_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="已有系统文件选择窗口正在打开，请先完成当前选择")
 
     result_box: dict[str, Any] = {"path": None, "error": None}
@@ -843,22 +1196,31 @@ def _run_tk_file_dialog(dialog_cb: Any) -> str | None:
                     root.destroy()
                 except Exception:
                     pass
+            # 锁的释放权严格归属对话框线程，确保系统对话框未真正关闭前绝不重入
+            dialog_lock.release()
 
+    t = threading.Thread(target=_ask, name="solacut-file-dialog", daemon=True)
     try:
-        t = threading.Thread(target=_ask, name="solacut-file-dialog", daemon=True)
         t.start()
-        t.join(timeout=180)
-        if result_box["error"] is not None:
-            raise result_box["error"]
-        return result_box["path"]
-    finally:
-        _FILE_DIALOG_LOCK.release()
+    except Exception:
+        dialog_lock.release()
+        raise
+
+    t.join(timeout=timeout_sec)
+    if t.is_alive():
+        raise HTTPException(
+            status_code=408,
+            detail="系统文件选择对话框等待超时，请先关闭当前已打开的系统选择窗口后再重试",
+        )
+    if result_box["error"] is not None:
+        raise result_box["error"]
+    return result_box["path"]
 
 
 @app.post("/api/browse-folder")
 def browse_folder(req: FolderReq) -> dict[str, Any]:
     """弹出系统原生文件夹选择框（Windows tkinter），用户取消则返回 null。"""
-    _reject_unc_path(req.initial_dir)
+    _reject_unsafe_path(req.initial_dir)
     initial = req.initial_dir or str(_PROJECT_ROOT)
     if not Path(initial).is_dir():
         initial = str(_PROJECT_ROOT)
@@ -878,9 +1240,23 @@ def browse_folder(req: FolderReq) -> dict[str, Any]:
 
 @app.post("/api/browse-file")
 def browse_file(req: BrowseFileReq) -> dict[str, Any]:
-    """弹出系统原生文件选择对话框（用于选择 4K 原片覆盖等单文件）。"""
-    _reject_unc_path(req.initial_dir)
+    """弹出系统原生文件选择对话框（支持视频原片或本地弹幕文件），选中后自动加入服务端授权白名单。"""
+    _reject_unsafe_path(req.initial_dir)
+    kind = (req.kind or "video").strip().lower()
+    if kind not in {"video", "chat"}:
+        raise HTTPException(status_code=400, detail=f"不支持的文件选择类型：{req.kind}")
     init_dir = req.initial_dir if req.initial_dir and Path(req.initial_dir).is_dir() else str(_PROJECT_ROOT)
+    filetypes = (
+        [
+            ("Chat Logs (JSON / JSONL / XML)", "*.json *.jsonl *.xml"),
+            ("All Files", "*.*"),
+        ]
+        if kind == "chat"
+        else [
+            ("视频文件", "*.mp4 *.mkv *.mov *.avi *.flv *.ts *.webm *.m4v"),
+            ("所有文件", "*.*"),
+        ]
+    )
     try:
         from tkinter import filedialog
 
@@ -889,12 +1265,11 @@ def browse_file(req: BrowseFileReq) -> dict[str, Any]:
                 parent=root,
                 title=req.title,
                 initialdir=init_dir,
-                filetypes=[
-                    ("视频文件", "*.mp4 *.mkv *.mov *.avi *.flv *.ts *.webm *.m4v"),
-                    ("所有文件", "*.*"),
-                ],
+                filetypes=filetypes,
             )
         )
+        if chosen:
+            _authorize_user_file(chosen)
         return {"path": chosen or ""}
     except HTTPException:
         raise
@@ -904,28 +1279,26 @@ def browse_file(req: BrowseFileReq) -> dict[str, Any]:
 
 @app.post("/api/open-folder")
 def open_folder(req: OpenFolderReq) -> dict[str, Any]:
-    """在系统文件管理器中安全打开指定本地文件夹（禁 UNC 路径、禁任意可执行文件启动）。"""
+    """在系统文件管理器中安全打开指定本地文件夹（无论存在与否均强制工作区边界校验）。"""
     cfg = _read_workbench_config()
     raw_path = (req.path or "").strip()
     if not raw_path:
         raw_path = cfg.get("output_dir") or str(_PROJECT_ROOT / "output")
-    _reject_unc_path(raw_path)
+    _reject_unsafe_path(raw_path)
 
     target = Path(raw_path)
     if target.is_file():
         target = target.parent
 
-    allowed_roots = [
-        _PROJECT_ROOT,
-        Path(cfg.get("input_dir") or (_PROJECT_ROOT / "input")),
-        Path(cfg.get("output_dir") or (_PROJECT_ROOT / "output")),
-    ]
-    in_workspace = any(_is_path_within(target, root) for root in allowed_roots)
+    allowed_roots = _get_allowed_read_roots(cfg)
+    if _has_symlink_escape(target, allowed_roots):
+        raise HTTPException(
+            status_code=403,
+            detail="安全限制：仅允许打开已配置工作区（input_dir / output_dir / 项目目录）内的文件夹",
+        )
+
     if not target.exists():
-        if in_workspace:
-            target.mkdir(parents=True, exist_ok=True)
-        else:
-            raise HTTPException(status_code=404, detail="目标目录不存在，请先确认输出路径")
+        target.mkdir(parents=True, exist_ok=True)
 
     resolved_target = target.resolve()
     if not resolved_target.is_dir():
@@ -943,11 +1316,9 @@ def list_videos(
     output_dir: str | None = Query(default=None),
 ) -> dict[str, Any]:
     """扫描输入目录的全部视频并统计各自的高光分析进度。"""
-    _reject_unc_path(input_dir)
-    _reject_unc_path(output_dir)
     cfg = _read_workbench_config()
-    in_dir = Path(input_dir or cfg["input_dir"])
-    out_dir = Path(output_dir or cfg["output_dir"])
+    in_dir = _resolve_allowed_input_dir(input_dir, cfg=cfg)
+    out_dir = _resolve_allowed_output_dir(output_dir, cfg=cfg, create=False)
     items = scan_input_videos(in_dir, out_dir)
     return {
         "input_dir": str(in_dir),
@@ -960,10 +1331,7 @@ def list_videos(
 @app.get("/api/video-stream")
 def stream_video(request: Request, path: str = Query(...)) -> Any:
     """支持 HTTP 206 Range 断点快进的视频流接口，秒开数 GB 直播录屏。"""
-    _reject_unc_path(path)
-    video_file = Path(path)
-    if not video_file.is_file() or video_file.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
-        raise HTTPException(status_code=404, detail="找不到有效的视频文件")
+    video_file = _resolve_allowed_read_path(path, SUPPORTED_VIDEO_EXTS, bad_ext_status=404)
 
     file_size = video_file.stat().st_size
     if file_size <= 0:
@@ -1029,6 +1397,20 @@ def stream_video(request: Request, path: str = Query(...)) -> Any:
     )
 
 
+def _sanitize_review_flags(raw_flags: Any) -> list[str]:
+    """安全清洗高光复核提醒标签列表（去重保序、剔除空白与控制字符）。"""
+    if not isinstance(raw_flags, list):
+        return []
+    cleaned: list[str] = []
+    for item in raw_flags:
+        if not isinstance(item, str):
+            continue
+        val = "".join(ch for ch in item.strip() if ord(ch) >= 32 and ord(ch) != 127)[:48]
+        if val and val not in cleaned:
+            cleaned.append(val)
+    return cleaned
+
+
 @app.get("/api/highlights")
 def get_highlights(
     stem: str = Query(...),
@@ -1036,14 +1418,33 @@ def get_highlights(
 ) -> dict[str, Any]:
     """读取某个视频的 Step 3 高光审片数据及最新切片产出清单。"""
     safe_stem = _validate_safe_stem(stem)
-    _reject_unc_path(output_dir)
     cfg = _read_workbench_config()
-    out_dir = Path(output_dir or cfg["output_dir"])
+    out_dir = _resolve_allowed_output_dir(output_dir, cfg=cfg, create=False)
     hl_path = out_dir / f"{safe_stem}_highlights.json"
     if not _is_path_within(hl_path, out_dir) or not hl_path.is_file():
         raise HTTPException(status_code=404, detail=f"尚未生成 {safe_stem} 的高光粗筛结果")
 
     data = json.loads(hl_path.read_text(encoding="utf-8"))
+    hl_list = data.get("highlights") if isinstance(data.get("highlights"), list) else []
+    reviewed_count = 0
+    for item in hl_list:
+        if not isinstance(item, dict):
+            continue
+        st = normalize_review_status(item.get("review_status"))
+        item["review_status"] = st
+        if isinstance(item.get("review_flags"), list):
+            item["review_flags"] = _sanitize_review_flags(item.get("review_flags"))
+        else:
+            item["review_flags"] = compute_review_flags(
+                item,
+                source_language=data.get("source_language"),
+                target_language=data.get("target_language"),
+            )
+        if st == "reviewed":
+            reviewed_count += 1
+    data["reviewed_count"] = reviewed_count
+    data["draft_count"] = len(hl_list) - reviewed_count
+
     manifest_path = out_dir / f"{safe_stem}_clips" / f"{safe_stem}_clips_manifest.json"
     clips_manifest = None
     if manifest_path.is_file():
@@ -1056,13 +1457,265 @@ def get_highlights(
     return data
 
 
+@app.get("/api/chapters")
+def api_get_video_chapters(video_path: str = Query(...)) -> dict[str, Any]:
+    """静默提取视频内嵌 OBS 章节标记（严格受控于工作区与授权白名单边界）。"""
+    target = _resolve_allowed_read_path(video_path, SUPPORTED_VIDEO_EXTS, bad_ext_status=404)
+
+    chapters = extract_video_chapters(target)
+    return {
+        "video_path": str(target.resolve()),
+        "count": len(chapters),
+        "chapters": chapters,
+    }
+
+
+@app.get("/api/transcript")
+def api_get_transcript(
+    stem: str = Query(...),
+    output_dir: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=200),
+    around_sec: float | None = Query(default=None, ge=0.0, allow_inf_nan=False),
+    window_sec: float = Query(default=30.0, ge=1.0, le=600.0, allow_inf_nan=False),
+) -> dict[str, Any]:
+    """读取全片逐字稿、关键词检索或 ±30s 上下文句段核查（无逐字稿时返回 exists=False 不刷 404）。"""
+    safe_stem = _validate_safe_stem(stem)
+    if around_sec is not None:
+        around_sec = _require_finite_float(around_sec, "around_sec")
+    window_sec = _require_finite_float(window_sec, "window_sec")
+
+    cfg = _read_workbench_config()
+    out_dir = _resolve_allowed_output_dir(output_dir, cfg=cfg, create=False)
+    tr_path = out_dir / f"{safe_stem}_transcript.json"
+    if not _is_path_within(tr_path, out_dir):
+        raise HTTPException(status_code=400, detail="安全限制：非法的逐字稿路径")
+
+    if not tr_path.is_file():
+        return {
+            "exists": False,
+            "stem": safe_stem,
+            "language": "",
+            "total_duration_sec": 0.0,
+            "total_count": 0,
+            "matched_count": 0,
+            "truncated": False,
+            "segments": [],
+        }
+
+    try:
+        tr_data = json.loads(tr_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"逐字稿 JSON 读取失败：{exc}") from exc
+
+    raw_segs = tr_data.get("segments") if isinstance(tr_data.get("segments"), list) else []
+    light_segs: list[dict[str, Any]] = []
+    for idx, seg in enumerate(raw_segs, start=1):
+        if not isinstance(seg, dict):
+            continue
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            st = max(0.0, float(seg.get("start_sec", seg.get("start", 0.0))))
+            ed = max(st, float(seg.get("end_sec", seg.get("end", st))))
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(st) and math.isfinite(ed)):
+            continue
+        light_segs.append(
+            {
+                "id": int(seg.get("id", idx)),
+                "start": round(st, 2),
+                "end": round(ed, 2),
+                "text": text,
+            }
+        )
+
+    filtered = light_segs
+    if around_sec is not None:
+        win_start = max(0.0, float(around_sec) - float(window_sec))
+        win_end = float(around_sec) + float(window_sec)
+        filtered = [s for s in filtered if s["end"] >= win_start and s["start"] <= win_end]
+
+    query_clean = (q or "").strip()
+    if query_clean:
+        tokens = [tok.lower() for tok in query_clean.split() if tok.strip()][:10]
+        if tokens:
+            filtered = [
+                s for s in filtered if all(tok in s["text"].lower() for tok in tokens)
+            ]
+
+    matched_count = len(filtered)
+    truncated = matched_count > _MAX_TRANSCRIPT_SEGMENTS
+    return {
+        "exists": True,
+        "stem": safe_stem,
+        "language": str(tr_data.get("language") or ""),
+        "total_duration_sec": float(tr_data.get("total_duration_sec") or 0.0),
+        "total_count": len(light_segs),
+        "matched_count": matched_count,
+        "truncated": truncated,
+        "segments": filtered[:_MAX_TRANSCRIPT_SEGMENTS],
+    }
+
+
+@app.post("/api/chat/import")
+def api_import_chat_radar(req: ChatImportReq) -> dict[str, Any]:
+    """导入 Twitch / B站 / YouTube 本地弹幕文件：原始弹幕拆离存 SQLite，轻量 JSON 仅存曲线与爆点。"""
+    safe_stem = _validate_safe_stem(req.stem)
+    bucket_sec = _require_finite_float(req.bucket_sec, "bucket_sec")
+    cfg = _read_workbench_config()
+    chat_file = _resolve_allowed_read_path(
+        req.chat_path,
+        _SUPPORTED_CHAT_EXTS,
+        cfg=cfg,
+        bad_ext_status=400,
+    )
+    out_dir = _resolve_allowed_output_dir(req.output_dir, cfg=cfg, create=True)
+    radar_path = out_dir / f"{safe_stem}_chat_radar.json"
+    db_path = out_dir / f"{safe_stem}_chat_messages.db"
+    if not _is_path_within(radar_path, out_dir) or not _is_path_within(db_path, out_dir):
+        raise HTTPException(status_code=400, detail="安全限制：非法的弹幕雷达输出路径")
+
+    try:
+        parsed = parse_chat_file(chat_file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    peaks_path = out_dir / f"{safe_stem}_audio_peaks.json"
+    audio_peaks: list[dict[str, Any]] = []
+    duration_hint: float | None = None
+    if peaks_path.is_file() and _is_path_within(peaks_path, out_dir):
+        try:
+            peaks_data = json.loads(peaks_path.read_text(encoding="utf-8"))
+            if isinstance(peaks_data, dict):
+                raw_peaks = peaks_data.get("peak_segments")
+                if isinstance(raw_peaks, list):
+                    audio_peaks = raw_peaks
+                dur_val = float(peaks_data.get("total_duration_sec") or 0.0)
+                if math.isfinite(dur_val) and dur_val > 0:
+                    duration_hint = dur_val
+        except Exception:
+            pass
+
+    spikes = analyze_chat_spikes(
+        parsed["messages"],
+        duration_sec=duration_hint,
+        bucket_sec=bucket_sec,
+    )
+    fusion_peaks = (
+        fuse_audio_and_chat_peaks(audio_peaks, spikes["chat_peaks"])
+        if audio_peaks
+        else []
+    )
+
+    # 拆离存储 + 按 stem 加互斥锁 + 原子替换：
+    # 原始弹幕写入 SQLite FTS5 库；*_chat_radar.json 彻底不再保存 messages 巨无霸数组，防止百兆 JSON OOM
+    saved_payload: dict[str, Any] = {
+        "stem": safe_stem,
+        "source_filename": chat_file.name,
+        "format": parsed["format"],
+        "message_count": parsed["message_count"],
+        "duration_sec": spikes["duration_sec"],
+        "bucket_sec": spikes["bucket_sec"],
+        "total_hype_messages": spikes["total_hype_messages"],
+        "baseline_median": spikes["baseline_median"],
+        "baseline_mad": spikes["baseline_mad"],
+        "messages_db": db_path.name,
+        "buckets": spikes["buckets"],
+        "chat_peaks": spikes["chat_peaks"],
+        "fusion_peaks": fusion_peaks,
+    }
+    with _get_chat_stem_lock(out_dir, safe_stem):
+        save_chat_messages_db(db_path, parsed["messages"])
+        atomic_write_json(radar_path, saved_payload, indent=None)
+
+    return {
+        "ok": True,
+        "exists": True,
+        "stem": safe_stem,
+        "source_filename": chat_file.name,
+        "format": parsed["format"],
+        "message_count": parsed["message_count"],
+        "duration_sec": spikes["duration_sec"],
+        "bucket_sec": spikes["bucket_sec"],
+        "total_hype_messages": spikes["total_hype_messages"],
+        "buckets": spikes["buckets"],
+        "chat_peaks": spikes["chat_peaks"],
+        "fusion_peaks": fusion_peaks,
+    }
+
+
+@app.get("/api/chat/heatmap")
+def api_get_chat_heatmap(
+    stem: str = Query(...),
+    output_dir: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=200),
+) -> dict[str, Any]:
+    """读取已导入弹幕的热力图曲线、爆点与基于 SQLite FTS5 的低内存梗词搜索结果。"""
+    safe_stem = _validate_safe_stem(stem)
+    cfg = _read_workbench_config()
+    out_dir = _resolve_allowed_output_dir(output_dir, cfg=cfg, create=False)
+    radar_path = out_dir / f"{safe_stem}_chat_radar.json"
+    db_path = out_dir / f"{safe_stem}_chat_messages.db"
+    if not _is_path_within(radar_path, out_dir):
+        raise HTTPException(status_code=400, detail="安全限制：非法的弹幕雷达路径")
+
+    if not radar_path.is_file():
+        return {
+            "exists": False,
+            "stem": safe_stem,
+            "buckets": [],
+            "chat_peaks": [],
+            "fusion_peaks": [],
+            "search": None,
+        }
+
+    try:
+        saved = json.loads(radar_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"弹幕雷达缓存读取失败：{exc}") from exc
+
+    search_res = None
+    query_clean = (q or "").strip()
+    if query_clean:
+        try:
+            if db_path.is_file() and _is_path_within(db_path, out_dir):
+                search_res = search_chat_messages_db(db_path, query_clean, max_matches=300)
+            else:
+                # 平滑兼容历史上曾内嵌 messages 数组的旧缓存
+                raw_search = search_chat_keywords(saved.get("messages") or [], query_clean)
+                matches = raw_search.get("matches") or []
+                search_res = {
+                    **raw_search,
+                    "matches": matches[:300],
+                    "matches_truncated": len(matches) > 300,
+                }
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "exists": True,
+        "stem": safe_stem,
+        "source_filename": saved.get("source_filename", ""),
+        "format": saved.get("format", ""),
+        "message_count": int(saved.get("message_count", 0) or 0),
+        "duration_sec": float(saved.get("duration_sec", 0.0) or 0.0),
+        "bucket_sec": float(saved.get("bucket_sec", 5.0) or 5.0),
+        "total_hype_messages": int(saved.get("total_hype_messages", 0) or 0),
+        "buckets": saved.get("buckets") or [],
+        "chat_peaks": saved.get("chat_peaks") or [],
+        "fusion_peaks": saved.get("fusion_peaks") or [],
+        "search": search_res,
+    }
+
+
 @app.get("/api/audio-streams")
 def list_video_audio_streams(path: str = Query(...)) -> dict[str, Any]:
     """探测指定视频文件的全部音频轨道，支持 OBS 多音轨人声麦轨自动推荐。"""
-    _reject_unc_path(path)
-    video_file = Path(path)
-    if not video_file.is_file() or video_file.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
-        raise HTTPException(status_code=404, detail="找不到有效的视频文件")
+    video_file = _resolve_allowed_read_path(path, SUPPORTED_VIDEO_EXTS, bad_ext_status=404)
 
     try:
         streams = probe_audio_streams(video_file)
@@ -1090,17 +1743,27 @@ def get_video_diagnostics(
 ) -> dict[str, Any]:
     """获取指定视频的 Step 1 直播状态评级、分小时热度与智能参数推荐。"""
     safe_stem = _validate_safe_stem(stem)
-    _reject_unc_path(output_dir)
     cfg = _read_workbench_config()
-    out_dir = Path(output_dir or cfg["output_dir"])
+    out_dir = _resolve_allowed_output_dir(output_dir, cfg=cfg, create=False)
     peaks_path = out_dir / f"{safe_stem}_audio_peaks.json"
     if not _is_path_within(peaks_path, out_dir) or not peaks_path.is_file():
         raise HTTPException(status_code=404, detail=f"尚未生成 {safe_stem} 的音频分析文件")
 
     peaks_data = json.loads(peaks_path.read_text(encoding="utf-8"))
     diag = get_or_compute_diagnostics(peaks_data)
+    dead_air_segs = peaks_data.get("dead_air_segments")
+    if not isinstance(dead_air_segs, list):
+        dead_air_segs = []
+    dead_air_total = float(
+        peaks_data.get(
+            "dead_air_total_sec",
+            sum(float(seg.get("duration_sec", 0.0) or 0.0) for seg in dead_air_segs if isinstance(seg, dict)),
+        )
+        or 0.0
+    )
+    dead_air_count = int(peaks_data.get("dead_air_count", len(dead_air_segs)) or 0)
     return {
-        "stem": stem,
+        "stem": safe_stem,
         "total_duration_sec": peaks_data.get("total_duration_sec", 0.0),
         "total_duration_str": peaks_data.get("total_duration_str", "-"),
         "rms_threshold": peaks_data.get("rms_threshold", 0.0),
@@ -1109,16 +1772,16 @@ def get_video_diagnostics(
         "vocal_bandpass": peaks_data.get("vocal_bandpass"),
         "diagnostics": diag,
         "peak_segments": peaks_data.get("peak_segments", []),
+        "dead_air_segments": dead_air_segs,
+        "dead_air_total_sec": round(dead_air_total, 2),
+        "dead_air_count": dead_air_count,
     }
 
 
 @app.get("/api/media-info")
 def api_media_info(path: str = Query(...)) -> dict[str, Any]:
     """获取视频分辨率、真实 FPS、编码与总时长元数据（带文件指纹内存缓存）。"""
-    _reject_unc_path(path)
-    video_file = Path(path)
-    if not video_file.is_file() or video_file.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
-        raise HTTPException(status_code=404, detail="找不到有效的视频文件")
+    video_file = _resolve_allowed_read_path(path, SUPPORTED_VIDEO_EXTS, bad_ext_status=404)
 
     stat = video_file.stat()
     cache_key = (str(video_file.resolve()), stat.st_mtime_ns, stat.st_size)
@@ -1143,15 +1806,18 @@ def api_media_info(path: str = Query(...)) -> dict[str, Any]:
 def api_audio_waveform(
     stem: str = Query(...),
     output_dir: str | None = Query(default=None),
-    start: float = Query(default=0.0, ge=0.0),
-    end: float | None = Query(default=None),
+    start: float = Query(default=0.0, ge=0.0, allow_inf_nan=False),
+    end: float | None = Query(default=None, allow_inf_nan=False),
     points: int = Query(default=1200, ge=16, le=4000),
 ) -> dict[str, Any]:
     """返回指定视频区间的高分辨率音频能量波形数组（优先直读 16k WAV，全片总览自动落盘缓存）。"""
     safe_stem = _validate_safe_stem(stem)
-    _reject_unc_path(output_dir)
+    start = _require_finite_float(start, "start")
+    if end is not None:
+        end = _require_finite_float(end, "end")
+
     cfg = _read_workbench_config()
-    out_dir = Path(output_dir or cfg["output_dir"])
+    out_dir = _resolve_allowed_output_dir(output_dir, cfg=cfg, create=False)
     wav_path = out_dir / f"{safe_stem}_16k.wav"
     peaks_path = out_dir / f"{safe_stem}_audio_peaks.json"
     if not _is_path_within(wav_path, out_dir) or not _is_path_within(peaks_path, out_dir):
@@ -1169,7 +1835,7 @@ def api_audio_waveform(
 
     if wav_path.is_file():
         is_overview = start <= 0.01 and (end is None or end <= 0.0) and points == 1200
-        overview_cache = out_dir / f"{stem}_waveform_overview.json"
+        overview_cache = out_dir / f"{safe_stem}_waveform_overview.json"
         wav_stat = wav_path.stat()
 
         if is_overview and overview_cache.is_file():
@@ -1190,7 +1856,7 @@ def api_audio_waveform(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"采样音频波形失败：{exc}") from exc
 
-        wf["stem"] = stem
+        wf["stem"] = safe_stem
         wf["rms_threshold"] = rms_threshold
 
         if is_overview:
@@ -1198,7 +1864,7 @@ def api_audio_waveform(
                 to_cache = dict(wf)
                 to_cache["wav_mtime_ns"] = wav_stat.st_mtime_ns
                 to_cache["wav_size"] = wav_stat.st_size
-                overview_cache.write_text(json.dumps(to_cache, ensure_ascii=False), encoding="utf-8")
+                atomic_write_json(overview_cache, to_cache, indent=None)
             except Exception:
                 pass
         return wf
@@ -1225,7 +1891,7 @@ def api_audio_waveform(
                     peak_arr[idx] = round(val, 4)
                     rms_arr[idx] = round(val * 0.72, 4)
         return {
-            "stem": stem,
+            "stem": safe_stem,
             "source": "peaks_fallback",
             "start_sec": round(s_sec, 3),
             "end_sec": round(e_sec, 3),
@@ -1236,30 +1902,28 @@ def api_audio_waveform(
             "rms_threshold": rms_threshold,
         }
 
-    raise HTTPException(status_code=404, detail=f"尚未找到 {stem} 的音频 WAV 或峰值分析数据")
+    raise HTTPException(status_code=404, detail=f"尚未找到 {safe_stem} 的音频 WAV 或峰值分析数据")
 
 
 @app.get("/api/thumbnail")
 def api_video_thumbnail(
     path: str = Query(...),
-    time_sec: float | None = Query(default=None, alias="time", ge=0.0),
-    sec: float | None = Query(default=None, ge=0.0),
+    time_sec: float | None = Query(default=None, alias="time", ge=0.0, allow_inf_nan=False),
+    sec: float | None = Query(default=None, ge=0.0, allow_inf_nan=False),
     w: int | None = Query(default=None, ge=80, le=960),
     width: int | None = Query(default=None, ge=80, le=960),
     output_dir: str | None = Query(default=None),
 ) -> FileResponse:
-    """极速抽取并缓存视频指定时间点的缩略图 JPEG（兼容 time/sec 与 w/width 参数）。"""
-    _reject_unc_path(path)
-    video_file = Path(path)
-    if not video_file.is_file() or video_file.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
-        raise HTTPException(status_code=404, detail="找不到有效的视频文件")
+    """极速抽取并缓存视频指定时间点的缩略图 JPEG（强制写入受控 cfg['output_dir']/.thumb_cache，忽略外部 output_dir）。"""
+    del output_dir  # 安全铁律：彻底忽略外部传入的 output_dir，禁止向任意目录创建 .thumb_cache
+    cfg = _read_workbench_config()
+    video_file = _resolve_allowed_read_path(path, SUPPORTED_VIDEO_EXTS, cfg=cfg, bad_ext_status=404)
 
     effective_time = time_sec if time_sec is not None else (sec if sec is not None else 10.0)
+    effective_time = _require_finite_float(effective_time, "time")
     effective_width = w if w is not None else (width if width is not None else 320)
 
-    _reject_unc_path(output_dir)
-    cfg = _read_workbench_config()
-    out_dir = Path(output_dir or cfg["output_dir"])
+    out_dir = Path(cfg["output_dir"]).resolve()
     cache_dir = out_dir / ".thumb_cache"
     try:
         jpg_path = extract_video_thumbnail(
@@ -1279,60 +1943,380 @@ def api_video_thumbnail(
 def save_highlights(req: HighlightsUpdateReq) -> dict[str, Any]:
     """保存人工审片后的勾选状态、微调起止时间、标题与双语字幕，并同步刷新 review.md。"""
     hl_path = _validate_highlights_json_path(req.highlights_json_path)
+    safe_stem = _validate_safe_stem(hl_path.stem.removesuffix("_highlights"))
 
-    data = json.loads(hl_path.read_text(encoding="utf-8"))
-    total_dur = float(data.get("total_duration_sec", 0.0))
+    with get_highlights_file_lock(hl_path):
+        data = json.loads(hl_path.read_text(encoding="utf-8"))
+        total_dur = float(data.get("total_duration_sec", 0.0) or 0.0)
+        hl_src_lang = str(data.get("source_language") or "en").strip().lower()
+        hl_tgt_lang = str(data.get("target_language") or ("en" if hl_src_lang == "zh" else "zh")).strip().lower()
+        is_same_lang = hl_src_lang == hl_tgt_lang
+        is_zh_src = hl_src_lang == "zh"
+        is_zh_en = hl_src_lang == "zh" and hl_tgt_lang == "en"
 
-    sanitized: list[dict[str, Any]] = []
-    for idx, item in enumerate(req.highlights, start=1):
-        try:
-            s_sec = max(0.0, float(item.get("start_sec", 0.0)))
-            e_sec = float(item.get("end_sec", 0.0))
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=f"第 {idx} 条起止时间格式不合法") from exc
+        sanitized: list[dict[str, Any]] = []
+        seen_ranks: set[int] = set()
+        for idx, item in enumerate(req.highlights, start=1):
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=400, detail=f"第 {idx} 条高光片段必须是对象")
 
-        if total_dur > 0:
-            e_sec = min(total_dur, e_sec)
-        if e_sec <= s_sec:
-            raise HTTPException(
-                status_code=400,
-                detail=f"第 {idx} 条结束时间（{e_sec}s）必须大于开始时间（{s_sec}s）",
-            )
+            s_sec = max(0.0, _require_finite_float(item.get("start_sec", 0.0), f"highlights[{idx}].start_sec"))
+            e_sec = _require_finite_float(item.get("end_sec", 0.0), f"highlights[{idx}].end_sec")
 
-        updated = dict(item)
-        updated["rank"] = int(item.get("rank", idx))
-        updated["selected"] = bool(item.get("selected", True))
-        updated["start_sec"] = round(s_sec, 2)
-        updated["end_sec"] = round(e_sec, 2)
-        updated["duration_sec"] = round(e_sec - s_sec, 2)
-        updated["start_str"] = format_timestamp(s_sec)
-        updated["end_str"] = format_timestamp(e_sec)
-        sanitized.append(updated)
+            if total_dur > 0:
+                e_sec = min(total_dur, e_sec)
+            if e_sec <= s_sec:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"第 {idx} 条结束时间（{e_sec}s）必须大于开始时间（{s_sec}s）",
+                )
 
-    data["highlights"] = sanitized
-    data["highlight_count"] = len(sanitized)
-    hl_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            # 强制唯一正整数 rank（拒绝 bool / 浮点数 / <=0 / 重复值）
+            raw_rank = item.get("rank", idx)
+            if isinstance(raw_rank, bool) or isinstance(raw_rank, float):
+                raise HTTPException(status_code=400, detail=f"第 {idx} 条 rank 必须为唯一正整数")
+            try:
+                rank_int = int(raw_rank)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"第 {idx} 条 rank 必须为唯一正整数") from exc
+            if rank_int <= 0 or rank_int in seen_ranks:
+                raise HTTPException(status_code=400, detail=f"第 {idx} 条 rank={rank_int} 非法或重复，必须为唯一正整数")
+            seen_ranks.add(rank_int)
 
-    # 同步刷新审片 Markdown 清单（强制写回同目录固定文件名，绝不盲信 JSON 内部可篡改路径）
-    review_md_path = hl_path.with_name(f"{hl_path.stem.removesuffix('_highlights')}_review.md")
-    data["review_md_path"] = str(review_md_path.resolve())
-    transcript_segments: list[dict[str, Any]] = []
-    tr_raw = str(data.get("transcript_json_path") or "").strip()
-    if tr_raw:
-        try:
-            _reject_unc_path(tr_raw)
-            tr_path = Path(tr_raw)
-            if tr_path.is_file() and _is_path_within(tr_path, hl_path.parent):
-                transcript_segments = json.loads(tr_path.read_text(encoding="utf-8")).get("segments", [])
-        except Exception:
-            transcript_segments = []
+            updated = dict(item)
+            updated["rank"] = rank_int
+            updated["selected"] = bool(item.get("selected", True))
+            updated["start_sec"] = round(s_sec, 2)
+            updated["end_sec"] = round(e_sec, 2)
+            updated["duration_sec"] = round(e_sec - s_sec, 2)
+            updated["start_str"] = format_timestamp(s_sec)
+            updated["end_str"] = format_timestamp(e_sec)
 
-    export_review_markdown(data, review_md_path, transcript_segments=transcript_segments)
+            # 兼容手动片段无 AI 评分（score=None）；有显式值时强制校验有限数值
+            if "score" in item:
+                raw_score = item.get("score")
+                if raw_score is None or (isinstance(raw_score, str) and not raw_score.strip()):
+                    updated["score"] = None
+                else:
+                    updated["score"] = round(_require_finite_float(raw_score, f"highlights[{idx}].score"), 1)
+
+            if "subtitles" in item and item.get("subtitles") is not None:
+                raw_subs = item.get("subtitles")
+                if not isinstance(raw_subs, list):
+                    raise HTTPException(status_code=400, detail=f"第 {idx} 条 subtitles 必须是数组")
+                updated["subtitles"] = _sanitize_client_subtitles(
+                    raw_subs,
+                    clip_start_sec=s_sec,
+                    clip_end_sec=e_sec,
+                    is_same_lang=is_same_lang,
+                    is_zh_src=is_zh_src,
+                )
+
+            t_tgt = str(updated.get("title_tgt") or "").strip()
+            t_src = str(updated.get("title_src") or "").strip()
+            t_zh = str(updated.get("title_zh") or "").strip()
+            t_en = str(updated.get("title_en") or "").strip()
+            if is_zh_en:
+                updated["title_tgt"] = t_tgt or t_en or t_zh
+                updated["title_src"] = t_src or t_zh or t_en
+                if not t_en and updated["title_tgt"]:
+                    updated["title_en"] = updated["title_tgt"]
+                if not t_zh and updated["title_src"]:
+                    updated["title_zh"] = updated["title_src"]
+            else:
+                updated["title_tgt"] = t_tgt or t_zh or t_en
+                updated["title_src"] = t_src or t_en or t_zh
+                if not t_zh and updated["title_tgt"]:
+                    updated["title_zh"] = updated["title_tgt"]
+                if not t_en and updated["title_src"]:
+                    updated["title_en"] = updated["title_src"]
+            updated["review_status"] = normalize_review_status(item.get("review_status"))
+            if "review_flags" in item and isinstance(item.get("review_flags"), list):
+                updated["review_flags"] = _sanitize_review_flags(item.get("review_flags"))
+            else:
+                updated["review_flags"] = compute_review_flags(
+                    updated,
+                    source_language=hl_src_lang,
+                    target_language=hl_tgt_lang,
+                )
+            sanitized.append(updated)
+
+        reviewed_count = sum(1 for item in sanitized if item.get("review_status") == "reviewed")
+        draft_count = len(sanitized) - reviewed_count
+        review_md_path = hl_path.with_name(f"{safe_stem}_review.md")
+
+        data["highlights"] = sanitized
+        data["highlight_count"] = len(sanitized)
+        data["reviewed_count"] = reviewed_count
+        data["draft_count"] = draft_count
+        # 先更新 review_md_path 再原子写盘，保证磁盘 JSON 与导出 Markdown 路径完全一致
+        data["review_md_path"] = str(review_md_path.resolve())
+        atomic_write_json(hl_path, data, indent=2)
+
+        transcript_segments: list[dict[str, Any]] = []
+        tr_raw = str(data.get("transcript_json_path") or "").strip()
+        if tr_raw:
+            try:
+                _reject_unsafe_path(tr_raw)
+                tr_path = Path(tr_raw)
+                if tr_path.is_file() and _is_path_within(tr_path, hl_path.parent):
+                    transcript_segments = json.loads(tr_path.read_text(encoding="utf-8")).get("segments", [])
+            except Exception:
+                transcript_segments = []
+
+        export_review_markdown(data, review_md_path, transcript_segments=transcript_segments)
+
     return {
         "ok": True,
         "selected_count": sum(1 for item in sanitized if item["selected"]),
+        "reviewed_count": reviewed_count,
+        "draft_count": draft_count,
         "highlights_json_path": str(hl_path.resolve()),
+        "review_md_path": str(review_md_path.resolve()),
         "highlights": sanitized,
+    }
+
+
+@app.post("/api/highlights/create-manual")
+def create_manual_highlights(req: ManualHighlightsCreateReq) -> dict[str, Any]:
+    """从逐字稿、OBS 章节或弹幕爆点一键手动新建高光片段（无需先跑 AI 粗筛，默认标为 reviewed 且 score=None）。"""
+    cfg = _read_workbench_config()
+    video_file = _resolve_allowed_read_path(
+        req.video_path,
+        SUPPORTED_VIDEO_EXTS,
+        cfg=cfg,
+        bad_ext_status=404,
+    )
+    safe_stem = _validate_safe_stem(video_file.stem)
+    out_dir = _resolve_allowed_output_dir(req.output_dir, cfg=cfg, create=True)
+    hl_path = out_dir / f"{safe_stem}_highlights.json"
+    tr_path = out_dir / f"{safe_stem}_transcript.json"
+    peaks_path = out_dir / f"{safe_stem}_audio_peaks.json"
+    review_md_path = out_dir / f"{safe_stem}_review.md"
+    if not _is_path_within(hl_path, out_dir):
+        raise HTTPException(status_code=400, detail="安全限制：非法的高光方案输出路径")
+
+    transcript_segments: list[dict[str, Any]] = []
+    tr_data: dict[str, Any] = {}
+    if tr_path.is_file() and _is_path_within(tr_path, out_dir):
+        try:
+            loaded_tr = json.loads(tr_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_tr, dict):
+                tr_data = loaded_tr
+                raw_tr_segs = loaded_tr.get("segments")
+                if isinstance(raw_tr_segs, list):
+                    transcript_segments = [s for s in raw_tr_segs if isinstance(s, dict)]
+        except Exception:
+            tr_data = {}
+
+    with get_highlights_file_lock(hl_path):
+        if hl_path.is_file():
+            data = json.loads(hl_path.read_text(encoding="utf-8"))
+            existing_hls = data.get("highlights") if isinstance(data.get("highlights"), list) else []
+        else:
+            total_dur = float(tr_data.get("total_duration_sec") or 0.0)
+            if total_dur <= 0 and peaks_path.is_file():
+                try:
+                    p_data = json.loads(peaks_path.read_text(encoding="utf-8"))
+                    total_dur = float(p_data.get("total_duration_sec") or 0.0)
+                except Exception:
+                    total_dur = 0.0
+            if total_dur <= 0:
+                try:
+                    info = probe_media_info(video_file)
+                    total_dur = float(info.get("duration_sec") or 0.0)
+                except Exception:
+                    total_dur = 0.0
+
+            src_lang = str(tr_data.get("language") or "en").strip().lower()
+            if src_lang not in _SUPPORTED_SUBTITLE_LANGS:
+                src_lang = "en"
+            tgt_lang = "en" if src_lang == "zh" else "zh"
+
+            data = {
+                "video_path": str(video_file.resolve()),
+                "transcript_json_path": str(tr_path.resolve()) if tr_path.is_file() else "",
+                "highlights_json_path": str(hl_path.resolve()),
+                "review_md_path": str(review_md_path.resolve()),
+                "model": "manual",
+                "source_language": src_lang,
+                "target_language": tgt_lang,
+                "subtitle_pair": f"{src_lang}->{tgt_lang}",
+                "bilingual_subtitles": False,
+                "total_duration_sec": round(total_dur, 2),
+                "total_duration_str": format_timestamp(total_dur) if total_dur > 0 else "-",
+                "selection_plan": {
+                    "duration_tier": "manual",
+                    "target_count": 0,
+                    "min_clip_sec": 5,
+                    "max_clip_sec": 300,
+                },
+                "elapsed_sec": 0.0,
+                "highlight_count": 0,
+                "highlights": [],
+            }
+            existing_hls = data["highlights"]
+
+        total_dur = float(data.get("total_duration_sec") or 0.0)
+        hl_src_lang = str(data.get("source_language") or "en").strip().lower()
+        hl_tgt_lang = str(data.get("target_language") or ("en" if hl_src_lang == "zh" else "zh")).strip().lower()
+        is_same_lang = hl_src_lang == hl_tgt_lang
+        is_zh_src = hl_src_lang == "zh"
+        is_zh_en = hl_src_lang == "zh" and hl_tgt_lang == "en"
+
+        max_rank = max((int(h.get("rank", 0) or 0) for h in existing_hls if isinstance(h, dict)), default=0)
+        added_ranks: list[int] = []
+        for idx, raw_item in enumerate(req.items, start=1):
+            if not isinstance(raw_item, dict):
+                raise HTTPException(status_code=400, detail=f"第 {idx} 条手动片段必须是对象")
+            s_sec = max(0.0, _require_finite_float(raw_item.get("start_sec", 0.0), f"items[{idx}].start_sec"))
+            e_sec = _require_finite_float(raw_item.get("end_sec", 0.0), f"items[{idx}].end_sec")
+            if total_dur > 0:
+                e_sec = min(total_dur, e_sec)
+            if e_sec <= s_sec:
+                e_sec = s_sec + 1.0
+                if total_dur > 0 and e_sec > total_dur:
+                    s_sec = max(0.0, total_dur - 1.0)
+                    e_sec = total_dur
+                if e_sec <= s_sec:
+                    raise HTTPException(status_code=400, detail=f"第 {idx} 条手动片段结束时间必须大于开始时间")
+
+            max_rank += 1
+            title_base = (
+                str(
+                    raw_item.get("title_tgt")
+                    or raw_item.get("title_zh")
+                    or raw_item.get("title_src")
+                    or raw_item.get("title_en")
+                    or ""
+                ).strip()
+                or f"Clip #{max_rank}"
+            )
+            title_src_val = str(raw_item.get("title_src") or raw_item.get("title_en") or title_base).strip()
+            title_tgt_val = str(raw_item.get("title_tgt") or raw_item.get("title_zh") or title_base).strip()
+
+            raw_subs_field = raw_item.get("subtitles")
+            if raw_subs_field is not None:
+                if not isinstance(raw_subs_field, list):
+                    raise HTTPException(status_code=400, detail=f"第 {idx} 条手动片段 subtitles 必须是数组")
+                raw_subs = _sanitize_client_subtitles(
+                    raw_subs_field,
+                    clip_start_sec=s_sec,
+                    clip_end_sec=e_sec,
+                    is_same_lang=is_same_lang,
+                    is_zh_src=is_zh_src,
+                )
+            elif transcript_segments:
+                extracted_subs: list[dict[str, Any]] = []
+                for seg in transcript_segments:
+                    try:
+                        ss = float(seg.get("start_sec", seg.get("start", 0.0)))
+                        se = float(seg.get("end_sec", seg.get("end", ss)))
+                    except (TypeError, ValueError):
+                        continue
+                    if not (math.isfinite(ss) and math.isfinite(se)):
+                        continue
+                    if se < s_sec or ss > e_sec:
+                        continue
+                    txt = _CTRL_CHARS_RE.sub(" ", str(seg.get("text") or "")).strip()[:500]
+                    if not txt:
+                        continue
+                    cs = round(max(s_sec, ss), 2)
+                    ce = round(min(e_sec, se), 2)
+                    if ce <= cs:
+                        continue
+                    # 跨语种自动截取仅填源语字幕，严禁把未翻译原片台词错误填入目标语/text_zh！
+                    if is_same_lang:
+                        sub_entry = {
+                            "start_sec": cs,
+                            "end_sec": ce,
+                            "text_orig": txt,
+                            "text_src": txt,
+                            "text_tgt": txt,
+                            "text_en": txt,
+                            "text_zh": txt,
+                        }
+                    else:
+                        sub_entry = {
+                            "start_sec": cs,
+                            "end_sec": ce,
+                            "text_orig": txt,
+                            "text_src": txt,
+                            "text_tgt": "",
+                            "text_en": "" if is_zh_src else txt,
+                            "text_zh": txt if is_zh_src else "",
+                        }
+                    extracted_subs.append(sub_entry)
+                raw_subs = extracted_subs
+            else:
+                raw_subs = []
+
+            raw_tags = raw_item.get("tags") if isinstance(raw_item.get("tags"), list) else []
+            clean_tags = [str(tg).strip()[:32] for tg in raw_tags if str(tg).strip()][:8]
+            if not clean_tags:
+                source_tag = str(raw_item.get("source") or "manual").strip()[:24] or "manual"
+                clean_tags = [source_tag]
+
+            # 手动新建片段默认 score = None（绝不伪造 8.5 AI 评分）
+            raw_score = raw_item.get("score")
+            if raw_score is None or (isinstance(raw_score, str) and not raw_score.strip()):
+                score_val: float | None = None
+            else:
+                score_num = _require_finite_float(raw_score, f"items[{idx}].score")
+                score_val = round(min(10.0, max(1.0, score_num)), 1)
+
+            new_clip: dict[str, Any] = {
+                "rank": max_rank,
+                "selected": True,
+                "review_status": normalize_review_status(raw_item.get("review_status"), default="reviewed"),
+                "start_sec": round(s_sec, 2),
+                "end_sec": round(e_sec, 2),
+                "duration_sec": round(e_sec - s_sec, 2),
+                "start_str": format_timestamp(s_sec),
+                "end_str": format_timestamp(e_sec),
+                "score": score_val,
+                "title_tgt": title_tgt_val,
+                "title_src": title_src_val,
+                "title_zh": title_src_val if is_zh_en else title_tgt_val,
+                "title_en": title_tgt_val if is_zh_en else title_src_val,
+                "summary_zh": str(raw_item.get("summary_zh") or "").strip(),
+                "reason": str(raw_item.get("reason") or "Manual selection").strip(),
+                "tags": clean_tags,
+                "subtitles": raw_subs,
+            }
+            new_clip["review_flags"] = compute_review_flags(
+                new_clip,
+                source_language=hl_src_lang,
+                target_language=hl_tgt_lang,
+            )
+            existing_hls.append(new_clip)
+            added_ranks.append(max_rank)
+
+        if total_dur <= 0 and existing_hls:
+            inferred = max(float(h.get("end_sec", 0.0) or 0.0) for h in existing_hls)
+            data["total_duration_sec"] = round(inferred, 2)
+            data["total_duration_str"] = format_timestamp(inferred)
+
+        reviewed_count = sum(
+            1 for item in existing_hls if normalize_review_status(item.get("review_status")) == "reviewed"
+        )
+        data["highlights"] = existing_hls
+        data["highlight_count"] = len(existing_hls)
+        data["reviewed_count"] = reviewed_count
+        data["draft_count"] = len(existing_hls) - reviewed_count
+        data["highlights_json_path"] = str(hl_path.resolve())
+        data["review_md_path"] = str(review_md_path.resolve())
+
+        atomic_write_json(hl_path, data, indent=2)
+        export_review_markdown(data, review_md_path, transcript_segments=transcript_segments)
+
+    return {
+        "ok": True,
+        "added_ranks": added_ranks,
+        "selected_count": sum(1 for item in existing_hls if item.get("selected", True) is True),
+        "reviewed_count": reviewed_count,
+        "draft_count": len(existing_hls) - reviewed_count,
+        **data,
     }
 
 
@@ -1363,12 +2347,26 @@ def _resolve_safe_audio_stream(
 @app.post("/api/tasks/analyze")
 def start_analyze_task(req: AnalyzeTaskReq) -> dict[str, Any]:
     """提交单个或批量视频粗筛任务到后台队列（Step 1 -> Step 2 -> Step 3）。"""
-    _reject_unc_path(req.output_dir)
-    for raw_vp in req.video_paths:
-        _reject_unc_path(raw_vp)
-    valid_paths = [Path(p) for p in req.video_paths if Path(p).is_file()]
-    if not valid_paths:
+    cfg = _read_workbench_config()
+    out_dir = _resolve_allowed_output_dir(req.output_dir, cfg=cfg, create=True)
+    _require_finite_float(req.top_percent, "top_percent")
+    _require_finite_float(req.vad_threshold, "vad_threshold")
+
+    valid_src_lang = _validate_optional_lang_code(req.language, "language")
+    valid_tgt_lang = _validate_optional_lang_code(req.target_language, "target_language")
+    if not req.video_paths:
         raise HTTPException(status_code=400, detail="没有找到有效的视频文件")
+
+    valid_paths: list[Path] = []
+    for raw_vp in req.video_paths:
+        vp = _resolve_allowed_read_path(
+            raw_vp,
+            SUPPORTED_VIDEO_EXTS,
+            cfg=cfg,
+            bad_ext_status=404,
+        )
+        _validate_safe_stem(vp.stem)
+        valid_paths.append(vp)
 
     title = (
         f"AI 粗筛：{valid_paths[0].name}"
@@ -1397,7 +2395,7 @@ def start_analyze_task(req: AnalyzeTaskReq) -> dict[str, Any]:
             safe_stream = _resolve_safe_audio_stream(vpath, req.audio_stream, on_fallback=_scaled_cb)
             res = run_analysis_pipeline(
                 video_path=vpath,
-                output_dir=req.output_dir,
+                output_dir=out_dir,
                 top_percent=req.top_percent,
                 asr_provider=req.asr_provider or None,
                 asr_mode=req.asr_mode,
@@ -1407,8 +2405,8 @@ def start_analyze_task(req: AnalyzeTaskReq) -> dict[str, Any]:
                 hotwords=req.hotwords,
                 normalize_audio=req.normalize_audio,
                 vad_threshold=req.vad_threshold,
-                language=req.language or None,
-                target_language=req.target_language or None,
+                language=valid_src_lang,
+                target_language=valid_tgt_lang,
                 top_k_highlights=req.top_k_highlights,
                 min_clip_sec=req.min_clip_sec,
                 max_clip_sec=req.max_clip_sec,
@@ -1434,11 +2432,25 @@ def start_analyze_task(req: AnalyzeTaskReq) -> dict[str, Any]:
 def start_retranslate_task(req: RetranslateTaskReq) -> dict[str, Any]:
     """对已有高光方案整场或定点单条重刷商业级双语字幕（支持附加语境背景与热词）。"""
     hl_path = _validate_highlights_json_path(req.highlights_json_path)
+    valid_src_lang = _validate_optional_lang_code(req.source_language, "source_language")
+    valid_tgt_lang = _validate_optional_lang_code(req.target_language, "target_language")
 
-    stem = hl_path.stem.removesuffix("_highlights")
+    clean_ranks: list[int] | None = None
+    if req.ranks is not None:
+        if len(req.ranks) == 0:
+            raise HTTPException(status_code=400, detail="ranks 不能为空列表；如需全量重刷请传 null")
+        clean_ranks = []
+        for r in req.ranks:
+            if isinstance(r, bool) or int(r) <= 0:
+                raise HTTPException(status_code=400, detail=f"非法片段排名 rank={r}，必须为正整数")
+            ri = int(r)
+            if ri not in clean_ranks:
+                clean_ranks.append(ri)
+
+    stem = _validate_safe_stem(hl_path.stem.removesuffix("_highlights"))
     rank_label = (
-        f"片段 #{', #'.join(str(r) for r in req.ranks)}"
-        if req.ranks
+        f"片段 #{', #'.join(str(r) for r in clean_ranks)}"
+        if clean_ranks
         else "全部高光"
     )
     title = f"重刷双语字幕（{rank_label}）：{stem}"
@@ -1449,9 +2461,9 @@ def start_retranslate_task(req: RetranslateTaskReq) -> dict[str, Any]:
             input_json_path=hl_path,
             hotwords=req.hotwords,
             extra_context=req.extra_context,
-            source_language=req.source_language or None,
-            target_language=req.target_language or None,
-            ranks=req.ranks,
+            source_language=valid_src_lang,
+            target_language=valid_tgt_lang,
+            ranks=clean_ranks,
         )
         ok_cnt = int(res.get("translated_ok_count", 0))
         fb_cnt = int(res.get("translation_fallback_count", 0))
@@ -1465,7 +2477,7 @@ def start_retranslate_task(req: RetranslateTaskReq) -> dict[str, Any]:
             "highlights_json_path": res["highlights_json_path"],
             "translated_ok_count": ok_cnt,
             "translation_fallback_count": fb_cnt,
-            "ranks": req.ranks,
+            "ranks": clean_ranks,
         }
 
     return _TASK_MANAGER.submit("retranslate", title, _worker)
@@ -1473,14 +2485,44 @@ def start_retranslate_task(req: RetranslateTaskReq) -> dict[str, Any]:
 
 @app.post("/api/tasks/export")
 def start_export_task(req: ExportTaskReq) -> dict[str, Any]:
-    """提交 Step 4 切片与专业标记导出任务到后台队列。"""
-    hl_path = _validate_highlights_json_path(req.highlights_json_path)
+    """提交 Step 4 切片与专业 NLE 工程包导出任务到后台队列。"""
+    cfg = _read_workbench_config()
+    hl_path = _validate_highlights_json_path(req.highlights_json_path, cfg=cfg)
+    if req.mode not in VALID_EXPORT_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的导出模式：{req.mode}，仅支持 {', '.join(sorted(VALID_EXPORT_MODES))}",
+        )
+    raw_sub_mode = req.subtitle_mode if req.subtitle_mode is not None else req.subtitle_lang
+    try:
+        resolved_sub_mode = normalize_subtitle_lang_mode(raw_sub_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    resolved_video_path: Path | None = None
     if req.video_path:
-        _reject_unc_path(req.video_path)
-        if not Path(req.video_path).is_file():
-            raise HTTPException(status_code=400, detail=f"指定的原片视频不存在：{req.video_path}")
-    _reject_unc_path(req.output_dir)
+        resolved_video_path = _resolve_allowed_read_path(
+            req.video_path,
+            SUPPORTED_VIDEO_EXTS,
+            cfg=cfg,
+            bad_ext_status=400,
+        )
+
+    resolved_out_dir: Path | None = None
+    if req.output_dir:
+        resolved_out_dir = _resolve_allowed_output_dir(req.output_dir, cfg=cfg, create=False)
+
+    clean_ranks: list[int] | None = None
+    if req.ranks is not None:
+        if len(req.ranks) == 0:
+            raise HTTPException(status_code=400, detail="ranks 不能为空列表；如需导出全部已选片段请传 null")
+        clean_ranks = []
+        for r in req.ranks:
+            if isinstance(r, bool) or int(r) <= 0:
+                raise HTTPException(status_code=400, detail=f"非法片段排名 rank={r}，必须为正整数")
+            ri = int(r)
+            if ri not in clean_ranks:
+                clean_ranks.append(ri)
 
     try:
         hl_data = json.loads(hl_path.read_text(encoding="utf-8"))
@@ -1488,29 +2530,44 @@ def start_export_task(req: ExportTaskReq) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"高光方案 JSON 解析失败：{exc}") from exc
 
     all_hls = hl_data.get("highlights") or []
-    if req.ranks:
-        rank_set = {int(r) for r in req.ranks}
-        matched = [h for h in all_hls if int(h.get("rank", 0)) in rank_set]
-        if not matched:
-            raise HTTPException(status_code=400, detail=f"找不到指定的片段排名：{req.ranks}")
+    if clean_ranks is not None:
+        rank_set = set(clean_ranks)
+        candidates = [
+            h for h in all_hls if isinstance(h, dict) and int(h.get("rank", 0) or 0) in rank_set
+        ]
+        if not candidates:
+            raise HTTPException(status_code=400, detail=f"找不到指定的片段排名：{clean_ranks}")
     else:
-        selected = [h for h in all_hls if h.get("selected", True) is True]
-        if not selected:
+        candidates = [h for h in all_hls if isinstance(h, dict) and h.get("selected", True) is True]
+        if not candidates:
             raise HTTPException(status_code=400, detail="当前没有勾选任何要导出的高光片段，请先勾选后再导出")
 
-    title = f"导出成片（{req.mode}）：{hl_path.stem.removesuffix('_highlights')}"
+    # 无论是否传 ranks，只要 only_reviewed=True 必须统一强制门禁，绝不允许指定 ranks 绕过审校！
+    if req.only_reviewed:
+        reviewed_candidates = [
+            h for h in candidates if normalize_review_status(h.get("review_status")) == "reviewed"
+        ]
+        if not reviewed_candidates:
+            raise HTTPException(
+                status_code=400,
+                detail="当前没有已标记为「已人工校对 (Reviewed)」的目标片段，请先完成人工审校或取消勾选「仅导出已人工校对」",
+            )
+
+    safe_stem = _validate_safe_stem(hl_path.stem.removesuffix("_highlights"))
+    title = f"导出交付（{req.mode}）：{safe_stem}"
 
     def _worker(report_cb: Any) -> dict[str, Any]:
         return run_export_pipeline(
             highlights_json_path=hl_path,
-            video_path=req.video_path or None,
-            output_dir=req.output_dir or None,
+            video_path=resolved_video_path,
+            output_dir=resolved_out_dir,
             mode=req.mode,
-            burn_subtitles=req.burn_subtitles,
-            subtitle_lang=req.subtitle_lang,
+            burn_subtitles=req.burn_subtitles and resolved_sub_mode != "none",
+            subtitle_lang=resolved_sub_mode,
             show_title_banner=req.show_title_banner,
+            only_reviewed=req.only_reviewed,
             encoder=req.encoder,
-            ranks=req.ranks or None,
+            ranks=clean_ranks,
             on_progress=report_cb,
         )
 
@@ -1520,12 +2577,23 @@ def start_export_task(req: ExportTaskReq) -> dict[str, Any]:
 @app.post("/api/tasks/diagnose")
 def start_diagnose_task(req: DiagnoseTaskReq) -> dict[str, Any]:
     """提交零 API 消耗的仅音频快速体检任务（批量测算直播评级与分小时热度）。"""
-    _reject_unc_path(req.output_dir)
-    for raw_vp in req.video_paths:
-        _reject_unc_path(raw_vp)
-    valid_paths = [Path(p) for p in req.video_paths if Path(p).is_file()]
-    if not valid_paths:
+    cfg = _read_workbench_config()
+    out_dir = _resolve_allowed_output_dir(req.output_dir, cfg=cfg, create=True)
+    _require_finite_float(req.top_percent, "top_percent")
+
+    if not req.video_paths:
         raise HTTPException(status_code=400, detail="没有找到有效的视频文件")
+
+    valid_paths: list[Path] = []
+    for raw_vp in req.video_paths:
+        vp = _resolve_allowed_read_path(
+            raw_vp,
+            SUPPORTED_VIDEO_EXTS,
+            cfg=cfg,
+            bad_ext_status=404,
+        )
+        _validate_safe_stem(vp.stem)
+        valid_paths.append(vp)
 
     title = (
         f"快速音频体检：{valid_paths[0].name}"
@@ -1554,7 +2622,7 @@ def start_diagnose_task(req: DiagnoseTaskReq) -> dict[str, Any]:
             safe_stream = _resolve_safe_audio_stream(vpath, req.audio_stream, on_fallback=_scaled_cb)
             res = run_quick_diagnose(
                 video_path=vpath,
-                output_dir=req.output_dir,
+                output_dir=out_dir,
                 top_percent=req.top_percent,
                 audio_stream=safe_stream,
                 vocal_bandpass=req.vocal_bandpass,

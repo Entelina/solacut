@@ -28,12 +28,13 @@ export class HistoryManager {
   }
 
   /** 重置历史栈并建立初始基线版本（v0） */
-  reset(snapshot, label = "初始状态") {
+  reset(snapshot, label = null) {
+    const resolvedLabel = label || (window.SolacutI18n ? window.SolacutI18n.t("hist.initialState") : "Initial state");
     this._seq = 1;
     this.entries = [
       {
         id: this._seq,
-        label,
+        label: resolvedLabel,
         category: "init",
         timeStr: nowClockStr(),
         timestamp: Date.now(),

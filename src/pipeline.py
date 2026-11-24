@@ -8,7 +8,7 @@
 
 命令行运行示例：
     python src/pipeline.py input/demo_highlight_30s.mp4
-    python src/pipeline.py input/ --output-dir output --auto-export
+    python src/pipeline.py input/ --output-dir output --export-nle-xml
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from src.config import resolve_asr_config, resolve_llm_role_config  # noqa: E402
 from src.step1_audio import analyze_video_audio, diagnose_stream_energy  # noqa: E402
 from src.step2_asr import transcribe_with_audio_peaks  # noqa: E402
 from src.step3_llm import (  # noqa: E402
+    atomic_write_json,
     enrich_highlights_with_bilingual_subtitles,
     select_highlights_with_llm,
 )
@@ -64,8 +65,8 @@ def _peaks_cache_matches(
     """检查已有 Step 1 缓存是否与当前源视频指纹、音轨、带通滤波与前百分比设置完全一致。"""
     if not peaks_data:
         return False
-    # 早期未携带 vocal_bandpass 字段的老缓存自动视作过期，确保平滑升级到带通检测
-    if "vocal_bandpass" not in peaks_data:
+    # 早期未携带 vocal_bandpass 或 dead_air_segments 字段的老缓存自动视作过期，确保平滑升级
+    if "vocal_bandpass" not in peaks_data or "dead_air_segments" not in peaks_data:
         return False
     if video_path is not None and video_path.is_file():
         cached_size = peaks_data.get("video_size")
@@ -133,21 +134,46 @@ def _highlights_cache_matches(
     max_clip_sec: int | None,
     bilingual_subtitles: bool,
     target_language: str | None = None,
+    source_language: str | None = None,
 ) -> bool:
-    """检查已有 Step 3 高光缓存是否与当前粗筛/精修模型、目标翻译语种及手动筛选参数一致。"""
+    """检查已有 Step 3 高光缓存是否与当前粗筛/精修模型、源/目标翻译语种及手动筛选参数一致。"""
     if not hl_data:
         return False
-    cached_screen = str(hl_data.get("screen_model") or hl_data.get("model") or "")
-    if cached_screen and cached_screen != "mock/custom" and cached_screen != str(screen_model):
+    cached_screen = str(hl_data.get("screen_model") or hl_data.get("model") or "").strip()
+    # 纯手动创建（model="manual"）或缺失模型信息的旧缓存不得当作 AI 粗筛缓存复用
+    if not cached_screen or cached_screen.lower() == "manual":
         return False
-    if bilingual_subtitles:
-        cached_polish = str(hl_data.get("polish_model") or cached_screen)
-        if cached_polish and cached_polish != "mock/custom" and cached_polish != str(polish_model):
+    if cached_screen != "mock/custom" and cached_screen != str(screen_model):
+        return False
+
+    cached_src = str(hl_data.get("source_language") or "").strip().lower()
+    req_src = (source_language or "").strip().lower()
+    if req_src and req_src != "auto":
+        if cached_src and cached_src != req_src:
             return False
-        if target_language and target_language.strip().lower() not in {"", "auto"}:
-            cached_tgt = str(hl_data.get("target_language") or "zh").strip().lower()
-            if cached_tgt != target_language.strip().lower():
+
+    effective_src = req_src if (req_src and req_src != "auto") else (cached_src or "en")
+    default_tgt_for_src = "en" if effective_src.startswith("zh") else "zh"
+    default_cached_tgt = "en" if cached_src.startswith("zh") else "zh"
+    cached_tgt = str(hl_data.get("target_language") or default_cached_tgt).strip().lower()
+
+    req_tgt = (target_language or "").strip().lower()
+    expected_tgt = req_tgt if (req_tgt and req_tgt != "auto") else default_tgt_for_src
+
+    if req_tgt and req_tgt != "auto":
+        if cached_tgt != req_tgt:
+            return False
+
+    if bilingual_subtitles:
+        if cached_tgt != expected_tgt:
+            return False
+        cached_polish = str(hl_data.get("polish_model") or "").strip()
+        if hl_data.get("bilingual_subtitles"):
+            eff_cached_polish = cached_polish or cached_screen
+            if eff_cached_polish != "mock/custom" and eff_cached_polish != str(polish_model):
                 return False
+        elif cached_polish and cached_polish != "mock/custom" and cached_polish != str(polish_model):
+            return False
 
     plan = hl_data.get("selection_plan") or {}
     if top_k_highlights is not None and int(plan.get("target_count", -1)) != int(top_k_highlights):
@@ -214,7 +240,25 @@ def scan_input_videos(
         has_peaks = bool(peaks_data)
         has_transcript = bool(transcript_data)
         has_highlights = bool(highlights_data)
-        has_clips = bool(manifest_data) and int(manifest_data.get("exported_count", 0)) > 0
+
+        # 精确区分「已实际导出 MP4 切片」与「仅导出 NLE 工程包（nle_only）」，避免误报“已出片”
+        if manifest_data:
+            if "exported_clip_count" in manifest_data:
+                exported_clip_count = int(manifest_data.get("exported_clip_count") or 0)
+            elif str(manifest_data.get("mode") or "").strip().lower() == "nle_only":
+                raw_clips = manifest_data.get("clips") if isinstance(manifest_data.get("clips"), list) else []
+                exported_clip_count = sum(
+                    1 for c in raw_clips if isinstance(c, dict) and str(c.get("mp4_path") or "").strip()
+                )
+            else:
+                exported_clip_count = int(manifest_data.get("exported_count") or 0)
+        else:
+            exported_clip_count = 0
+
+        has_clips = bool(manifest_data) and exported_clip_count > 0
+        has_nle_export = bool(manifest_data) and bool(
+            manifest_data.get("fcpxml_path") or manifest_data.get("premiere_xml_path")
+        )
 
         if has_clips:
             stage = "exported"
@@ -234,6 +278,10 @@ def scan_input_videos(
 
         hl_list = highlights_data.get("highlights", [])
         selected_count = sum(1 for item in hl_list if item.get("selected", True) is True)
+        reviewed_count = sum(
+            1 for item in hl_list if str(item.get("review_status") or "draft").strip().lower() == "reviewed"
+        )
+        draft_count = len(hl_list) - reviewed_count
 
         duration_str = (
             highlights_data.get("total_duration_str")
@@ -262,15 +310,20 @@ def scan_input_videos(
                 "has_transcript": has_transcript,
                 "has_highlights": has_highlights,
                 "has_clips": has_clips,
+                "has_nle_export": has_nle_export,
                 "total_duration_sec": duration_sec,
                 "total_duration_str": duration_str,
                 "highlight_count": len(hl_list),
                 "selected_count": selected_count,
+                "reviewed_count": reviewed_count,
+                "draft_count": draft_count,
+                "dead_air_total_sec": float(peaks_data.get("dead_air_total_sec", 0.0) or 0.0),
                 "bilingual_subtitles": bool(highlights_data.get("bilingual_subtitles", False)),
                 "source_language": highlights_data.get("source_language") or transcript_data.get("language") or "",
                 "target_language": highlights_data.get("target_language") or "",
                 "subtitle_pair": highlights_data.get("subtitle_pair") or "",
                 "exported_count": int(manifest_data.get("exported_count", 0)),
+                "exported_clip_count": exported_clip_count,
                 "audio_stream": int(peaks_data.get("audio_stream", 0)),
                 "vocal_bandpass": peaks_data.get("vocal_bandpass"),
                 "grade": diagnostics.get("grade") if diagnostics else None,
@@ -317,7 +370,7 @@ def run_quick_diagnose(
         diag = get_or_compute_diagnostics(cached_peaks)
         if diag and "diagnostics" not in cached_peaks:
             cached_peaks["diagnostics"] = diag
-            peaks_json.write_text(json.dumps(cached_peaks, ensure_ascii=False, indent=2), encoding="utf-8")
+            atomic_write_json(peaks_json, cached_peaks, indent=2)
         res = cached_peaks
     else:
         bp_tag = "300~3400Hz人声带通" if vocal_bandpass else "全频段"
@@ -519,21 +572,39 @@ def run_analysis_pipeline(
             max_clip_sec=max_clip_sec,
             bilingual_subtitles=bilingual_subtitles,
             target_language=target_language,
+            source_language=language,
         )
     )
     if step3_cache_hit:
         if bilingual_subtitles and not existing_hl.get("bilingual_subtitles"):
-            _emit(on_progress, "step3", 78, f"[{stem}] Step 3 检测到已有粗筛结果，正在补充多语种双语字幕...")
-            step3_res = enrich_highlights_with_bilingual_subtitles(
-                input_json_path=highlights_json,
-                output_dir=out_dir,
-                model=polish_model if polish_model is not None else llm_model,
-                base_url=polish_base_url if polish_base_url is not None else base_url,
-                api_key=polish_api_key if polish_api_key is not None else api_key,
-                hotwords=hotwords,
-                source_language=language,
-                target_language=target_language,
-            )
+            # 仅对尚未人工审校（review_status != "reviewed"）的条目补齐双语，绝不覆毁人工已审校内容
+            unreviewed_ranks = [
+                int(h.get("rank") or idx)
+                for idx, h in enumerate(existing_hl.get("highlights") or [], start=1)
+                if isinstance(h, dict)
+                and str(h.get("review_status") or "draft").strip().lower() != "reviewed"
+            ]
+            if unreviewed_ranks:
+                _emit(
+                    on_progress,
+                    "step3",
+                    78,
+                    f"[{stem}] Step 3 检测到已有粗筛结果，正在为 {len(unreviewed_ranks)} 条待审校片段补充双语字幕...",
+                )
+                step3_res = enrich_highlights_with_bilingual_subtitles(
+                    input_json_path=highlights_json,
+                    output_dir=out_dir,
+                    model=polish_model if polish_model is not None else llm_model,
+                    base_url=polish_base_url if polish_base_url is not None else base_url,
+                    api_key=polish_api_key if polish_api_key is not None else api_key,
+                    hotwords=hotwords,
+                    source_language=language,
+                    target_language=target_language,
+                    ranks=unreviewed_ranks,
+                )
+            else:
+                _emit(on_progress, "step3", 96, f"[{stem}] Step 3 全部高光均已人工审校，跳过覆盖直接复用缓存")
+                step3_res = existing_hl
         else:
             _emit(on_progress, "step3", 96, f"[{stem}] Step 3 复用缓存：{highlights_json.name}")
             step3_res = existing_hl
@@ -559,6 +630,7 @@ def run_analysis_pipeline(
             hotwords=hotwords,
             bilingual_subtitles=bilingual_subtitles,
             target_language=target_language,
+            source_language=language,
         )
         _emit(
             on_progress,
@@ -588,17 +660,18 @@ def run_export_pipeline(
     mode: str = "lossless",
     burn_subtitles: bool = True,
     subtitle_lang: str = "bilingual",
-    show_title_banner: bool = True,
+    show_title_banner: bool = False,
     encoder: str = "auto",
     width: int = 1080,
     height: int = 1920,
     limit: int | None = None,
     ranks: list[int] | None = None,
+    only_reviewed: bool = False,
     on_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """一键运行 Step 4 导出已选切片与专业时间线标记，并上报进度。"""
+    """一键运行 Step 4 导出 NLE 工程包（FCPXML / Premiere XML / EDL / CSV）与可选切片，并上报进度。"""
     hl_path = Path(highlights_json_path)
-    _emit(on_progress, "step4", 10, f"开始导出切片（模式：{mode} | 字幕：{subtitle_lang}）...")
+    _emit(on_progress, "step4", 10, f"开始导出交付包（模式：{mode} | 字幕：{subtitle_lang}）...")
     res = render_highlight_clips(
         highlights_json_path=hl_path,
         video_path=video_path,
@@ -612,20 +685,28 @@ def run_export_pipeline(
         height=height,
         limit=limit,
         ranks=ranks,
+        only_reviewed=only_reviewed,
         on_progress=on_progress,
     )
-    _emit(
-        on_progress,
-        "done",
-        100,
-        f"导出完成！共输出 {res.get('exported_count', 0)} 条切片与剪辑标记到 {res.get('output_dir')}",
-    )
+    nle_names = [
+        Path(str(res[k])).name
+        for k in ("fcpxml_path", "premiere_xml_path", "markers_edl_path", "markers_csv_path")
+        if res.get(k)
+    ]
+    nle_tag = f" | NLE: {', '.join(nle_names)}" if nle_names else ""
+    if mode == "nle_only":
+        done_msg = f"NLE 工程包导出完成（零转码，{res.get('elapsed_sec', 0)}s）→ {res.get('output_dir')}{nle_tag}"
+    else:
+        done_msg = (
+            f"导出完成！共输出 {res.get('exported_count', 0)} 条切片与 NLE 工程包到 {res.get('output_dir')}{nle_tag}"
+        )
+    _emit(on_progress, "done", 100, done_msg)
     return res
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """构建流水线 CLI 参数。"""
-    parser = argparse.ArgumentParser(description="一键运行游戏录屏高光粗筛与可选自动出片流水线。")
+    parser = argparse.ArgumentParser(description="一键运行游戏录屏高光粗筛与免转码 NLE 工程包导出流水线。")
     parser.add_argument("target", help="单个视频路径，或包含多个视频的输入文件夹路径")
     parser.add_argument("--output-dir", default="output", help="统一输出目录（默认：output）")
     parser.add_argument("--audio-stream", type=int, default=0, help="提取视频的第几条音轨（0 起算，适合 OBS 多音轨）")
@@ -644,12 +725,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--screen-model", default=None, help="覆盖 Step 3 粗筛大模型（默认 deepseek-flash）")
     parser.add_argument("--polish-model", default=None, help="覆盖 Step 3 双语精修大模型")
     parser.add_argument("--force", action="store_true", help="忽略已有缓存，强制从头重跑")
-    parser.add_argument("--auto-export", action="store_true", help="粗筛完成后顺带直接按默认配置出片")
     parser.add_argument(
-        "--export-mode",
-        choices=["lossless", "vertical", "landscape"],
-        default="lossless",
-        help="自动出片时的导出模式",
+        "--export-nle-xml",
+        action="store_true",
+        help="粗筛后自动输出免转码 NLE 工程包（FCPXML / Premiere XML / EDL / CSV），供导入剪辑软件人工精剪（不自动出成片）",
+    )
+    parser.add_argument(
+        "--only-reviewed",
+        action="store_true",
+        help="仅导出已人工确认（review_status=reviewed）的高光片段",
     )
     return parser
 
@@ -698,10 +782,11 @@ def main(argv: list[str] | None = None) -> int:
             force_rerun=args.force,
             on_progress=_log,
         )
-        if args.auto_export:
+        if args.export_nle_xml:
             run_export_pipeline(
                 highlights_json_path=res["highlights_json_path"],
-                mode=args.export_mode,
+                mode="nle_only",
+                only_reviewed=args.only_reviewed,
                 on_progress=_log,
             )
 

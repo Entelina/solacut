@@ -620,10 +620,11 @@ export class ProgramMonitorEngine {
 
   _syncPlayButton() {
     if (!this.playToggleBtn || !this.videoEl) return;
+    const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
     const playing = !this.videoEl.paused && !this.videoEl.ended;
     this.playToggleBtn.dataset.playing = playing ? "true" : "false";
-    this.playToggleBtn.setAttribute("aria-label", playing ? "暂停" : "播放");
-    this.playToggleBtn.title = playing ? "暂停 (Space)" : "播放 (Space)";
+    this.playToggleBtn.setAttribute("aria-label", playing ? t("mon.pause") : t("mon.play"));
+    this.playToggleBtn.title = playing ? t("mon.pauseTitle") : t("mon.playTitle");
     this.onPlayStateChange?.(playing);
   }
 
@@ -693,12 +694,22 @@ export class ProgramMonitorEngine {
     sl.style.setProperty("--control-value", String(pct));
     sl.setAttribute("aria-valuetext", `${pct}%${this.dimmed ? " (DIM -20dB)" : ""}`);
     if (this.muteBtn) {
+      const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
       this.muteBtn.dataset.muted = v.muted || pct === 0 ? "true" : "false";
-      this.muteBtn.title = v.muted || pct === 0 ? "取消静音" : `静音 (${pct}%)`;
+      this.muteBtn.title = v.muted || pct === 0 ? t("mon.unmute") : t("mon.mutePct", { pct });
+      this.muteBtn.setAttribute("aria-label", v.muted || pct === 0 ? t("mon.unmute") : t("mon.mute"));
     }
     if (this.dimBtn) {
       this.dimBtn.dataset.active = this.dimmed ? "true" : "false";
       this.dimBtn.setAttribute("aria-pressed", this.dimmed ? "true" : "false");
+    }
+  }
+
+  refreshLocale() {
+    this._syncPlayButton();
+    this._syncVolumeSlider();
+    if (this.frameEl && window.SolacutI18n) {
+      this.frameEl.setAttribute("data-cinema-hint", window.SolacutI18n.t("mon.cinemaHint"));
     }
   }
 

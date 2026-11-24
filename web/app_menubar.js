@@ -27,9 +27,10 @@ export class NleAppMenuBar {
 
   _build() {
     if (!this.containerEl) return;
+    const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
     this.containerEl.replaceChildren();
     this.containerEl.setAttribute("role", "menubar");
-    this.containerEl.setAttribute("aria-label", "应用菜单");
+    this.containerEl.setAttribute("aria-label", t("menu.ariaLabel"));
 
     const hasPopover = Object.hasOwn(HTMLElement.prototype, "popover");
 
@@ -42,7 +43,7 @@ export class NleAppMenuBar {
       trigger.setAttribute("aria-haspopup", "menu");
       trigger.setAttribute("aria-expanded", "false");
       trigger.tabIndex = idx === 0 ? 0 : -1;
-      trigger.textContent = def.label;
+      trigger.textContent = typeof def.getLabel === "function" ? def.getLabel() : def.label;
 
       const popId = `menubar-pop-${def.id}`;
       trigger.setAttribute("aria-controls", popId);
@@ -341,6 +342,18 @@ export class NleAppMenuBar {
       this.closeAll();
     }
     next.focus({ preventScroll: true });
+  }
+
+  refreshLabels() {
+    const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
+    if (this.containerEl) {
+      this.containerEl.setAttribute("aria-label", t("menu.ariaLabel"));
+    }
+    for (const trigger of this.triggers) {
+      const def = this.menuDefByTrigger.get(trigger);
+      if (!def) continue;
+      trigger.textContent = typeof def.getLabel === "function" ? def.getLabel() : def.label;
+    }
   }
 
   _bindGlobal() {

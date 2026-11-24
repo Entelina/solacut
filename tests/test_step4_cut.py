@@ -371,7 +371,7 @@ class TestStep4Cut(unittest.TestCase):
             )
             ja_ass_txt = ja_ass.read_text(encoding="utf-8")
             self.assertIn("Style: ZH,Microsoft YaHei,", ja_ass_txt)
-            self.assertIn("Style: EN,Meiryo,", ja_ass_txt)
+            self.assertIn("Style: EN,Yu Gothic UI,", ja_ass_txt)
 
             # 2. 韩→中倒序双语（韩上/中下）SRT 与 ASS（主行自动 Malgun Gothic）
             ko_subs = [

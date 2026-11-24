@@ -91,10 +91,12 @@ export function createScrubbyControl({
   mode = "number", // 'number' | 'timecode'
   suffix = "",
   placeholder = "-",
-  title = "左右拖拉调节数值，单击直接输入",
+  title = null,
   onInput = null,
   onChange = null,
 }) {
+  const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
+  const resolvedTitle = title || t("nle.scrubDefaultTitle");
   let curVal = value === null || value === undefined || value === "" ? null : Number(value);
   let editing = false;
   let minBound = min;
@@ -102,7 +104,7 @@ export function createScrubbyControl({
 
   const wrap = document.createElement("span");
   wrap.className = "scrubby-control mono-num";
-  wrap.title = title;
+  wrap.title = resolvedTitle;
   wrap.tabIndex = 0;
 
   const textSpan = document.createElement("span");
@@ -279,15 +281,16 @@ export function enhanceNumberInputToScrubby(inputEl, opts = {}) {
   const step = inputEl.step && inputEl.step !== "any" ? Number(inputEl.step) : 1;
   const precision = step < 1 ? (String(step).split(".")[1]?.length || 1) : 0;
 
+  const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
   const ctrl = createScrubbyControl({
     value: inputEl.value !== "" ? Number(inputEl.value) : null,
     min,
     max,
     step,
     precision,
-    placeholder: inputEl.placeholder || "自适应",
+    placeholder: inputEl.placeholder || t("common.auto"),
     suffix: opts.suffix || "",
-    title: `${inputEl.title || ""}（左右拖拉调值，单击输入）`.trim(),
+    title: `${inputEl.title || ""}${t("nle.scrubHintSuffix")}`.trim(),
     onChange: (val) => {
       inputEl.value = val === null ? "" : String(val);
       inputEl.dispatchEvent(new Event("change", { bubbles: true }));
@@ -309,8 +312,17 @@ export function enhanceNumberInputToScrubby(inputEl, opts = {}) {
   const syncFromInput = () => {
     ctrl.setValue(inputEl.value !== "" ? Number(inputEl.value) : null);
   };
+  const syncLocaleFromInput = () => {
+    const newPh = inputEl.placeholder || t("common.auto");
+    ctrl.el.title = `${inputEl.title || ""}${t("nle.scrubHintSuffix")}`.trim();
+    if (ctrl.getValue() === null) {
+      const valSpan = ctrl.el.querySelector(".scrubby-value");
+      if (valSpan) valSpan.textContent = newPh;
+    }
+  };
   inputEl.addEventListener("change", syncFromInput);
   inputEl._syncScrubby = syncFromInput;
+  inputEl._syncScrubbyLocale = syncLocaleFromInput;
   return ctrl;
 }
 
@@ -345,7 +357,7 @@ export class NleContextMenu {
     this._list = document.createElement("div");
     this._list.className = "ctx-menu-list";
     this._list.setAttribute("focusgroup", "menu nomemory");
-    this._list.setAttribute("aria-label", "上下文菜单");
+    this._list.setAttribute("aria-label", window.SolacutI18n ? window.SolacutI18n.t("nle.contextMenuAria") : "Context Menu");
     if (!this._supportsFocusgroup) {
       this._list.setAttribute("role", "menu");
     }
@@ -406,6 +418,9 @@ export class NleContextMenu {
    */
   open(x, y, items) {
     if (!items || items.length === 0) return;
+    if (window.SolacutI18n) {
+      this._list.setAttribute("aria-label", window.SolacutI18n.t("nle.contextMenuAria"));
+    }
     this._lastFocus = document.activeElement;
     this._list.replaceChildren();
 

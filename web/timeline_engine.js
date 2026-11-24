@@ -61,6 +61,11 @@ export class DualTimelineEngine {
     onRazorSubtitle,
     onClipContextMenu,
     onSubtitleContextMenu,
+    onChapterClick,
+    onChapterContextMenu,
+    onRulerContextMenu,
+    onChatPeakClick,
+    onChatPeakContextMenu,
     onRequestWaveform,
     onToolChange,
     onSnapChange,
@@ -83,11 +88,17 @@ export class DualTimelineEngine {
     this.onRazorSubtitle = onRazorSubtitle;
     this.onClipContextMenu = onClipContextMenu;
     this.onSubtitleContextMenu = onSubtitleContextMenu;
+    this.onChapterClick = onChapterClick;
+    this.onChapterContextMenu = onChapterContextMenu;
+    this.onRulerContextMenu = onRulerContextMenu;
+    this.onChatPeakClick = onChatPeakClick;
+    this.onChatPeakContextMenu = onChatPeakContextMenu;
     this.onRequestWaveform = onRequestWaveform;
     this.onToolChange = onToolChange;
     this.onSnapChange = onSnapChange;
 
     // 媒体与数据状态
+    this.mediaKey = "";
     this.videoStem = "";
     this.duration = 0;
     this.fps = 30;
@@ -96,6 +107,9 @@ export class DualTimelineEngine {
     this.activeClipRank = null;
     this.activeSubKey = "";
     this.peakSegments = [];
+    this.chapters = [];
+    this.deadAirSegments = [];
+    this.chatRadar = null; // { buckets, chat_peaks, fusion_peaks, search }
 
     // 波形缓存（全片总览 + 局部高清）
     this.overviewWave = null; // { start_sec, end_sec, rms, peak, rms_threshold }
@@ -141,16 +155,23 @@ export class DualTimelineEngine {
   }
 
   /* ==================== 外部数据同步接口 ==================== */
-  setMedia({ stem = "", duration = 0, fps = 30, resetView = false }) {
-    const changedStem = stem !== this.videoStem;
-    this.videoStem = stem || "";
+  setMedia({ stem = "", mediaKey = "", duration = 0, fps = 30, resetView = false }) {
+    const nextStem = stem || "";
+    const nextMediaKey = mediaKey || nextStem;
+    const changedStem = nextStem !== this.videoStem;
+    const changedMedia = nextMediaKey !== this.mediaKey || changedStem;
+    this.mediaKey = nextMediaKey;
+    this.videoStem = nextStem;
     this.duration = Math.max(0, Number(duration) || 0);
     this.fps = Math.max(1, Number(fps) || 30);
 
-    if (changedStem) {
+    if (changedMedia || resetView) {
       this.overviewWave = null;
       this.detailWave = null;
       this.peakSegments = [];
+      this.chapters = [];
+      this.deadAirSegments = [];
+      this.chatRadar = null;
       this._waveFetchSeq += 1;
       if (this._waveFetchTimer) {
         clearTimeout(this._waveFetchTimer);
@@ -158,7 +179,7 @@ export class DualTimelineEngine {
       }
     }
 
-    if (changedStem || resetView || this.viewEnd <= this.viewStart) {
+    if (changedMedia || resetView || this.viewEnd <= this.viewStart) {
       this.viewStart = 0;
       this.viewEnd = Math.max(10, this.duration || 120);
     } else if (this.duration > 0 && this.viewEnd > this.duration) {
@@ -198,6 +219,21 @@ export class DualTimelineEngine {
 
   setPeakSegments(peaks) {
     this.peakSegments = Array.isArray(peaks) ? peaks : [];
+    this.requestDraw();
+  }
+
+  setChapters(chapters) {
+    this.chapters = Array.isArray(chapters) ? chapters : [];
+    this.requestDraw();
+  }
+
+  setDeadAirSegments(segments) {
+    this.deadAirSegments = Array.isArray(segments) ? segments : [];
+    this.requestDraw();
+  }
+
+  setChatRadar(radarData) {
+    this.chatRadar = radarData && radarData.exists !== false ? radarData : null;
     this.requestDraw();
   }
 
@@ -378,9 +414,15 @@ export class DualTimelineEngine {
     }
 
     if (this.viewSpanLabel) {
+      const fullLabel = window.SolacutI18n ? window.SolacutI18n.t("tl.spanAll") : "Full";
       this.viewSpanLabel.textContent =
-        span >= total * 0.985 ? "全片" : formatRulerClock(span);
+        span >= total * 0.985 ? fullLabel : formatRulerClock(span);
     }
+  }
+
+  refreshLocale() {
+    this._syncZoomControls(false);
+    this.requestDraw();
   }
 
   _scheduleDetailWaveformFetch() {
@@ -396,13 +438,14 @@ export class DualTimelineEngine {
 
     this._waveFetchTimer = setTimeout(async () => {
       const seq = ++this._waveFetchSeq;
+      const reqMediaKey = this.mediaKey;
       const rect = this.tracksCanvas?.getBoundingClientRect();
       const targetPoints = clamp(Math.round((rect?.width || 800) * 0.85), 240, 1400);
       const reqStart = Math.max(0, this.viewStart - span * 0.08);
       const reqEnd = Math.min(this.duration, this.viewEnd + span * 0.08);
       try {
         const data = await this.onRequestWaveform(this.videoStem, reqStart, reqEnd, targetPoints);
-        if (seq !== this._waveFetchSeq || !data || !Array.isArray(data.rms)) return;
+        if (seq !== this._waveFetchSeq || reqMediaKey !== this.mediaKey || !data || !Array.isArray(data.rms)) return;
         this.detailWave = data;
         this.requestDraw();
       } catch {
@@ -457,6 +500,19 @@ export class DualTimelineEngine {
         pts.push(ps, Number(p.end_sec) || ps);
       }
     }
+    for (const ch of this.chapters) {
+      const cs = Number(ch.start_sec);
+      if (cs >= this.viewStart && cs <= this.viewEnd) {
+        pts.push(cs);
+      }
+    }
+    const chatPeaks = this.chatRadar?.chat_peaks || [];
+    for (const cp of chatPeaks) {
+      const ps = Number(cp.peak_sec ?? cp.start_sec);
+      if (ps >= this.viewStart && ps <= this.viewEnd) {
+        pts.push(ps);
+      }
+    }
     return pts;
   }
 
@@ -485,6 +541,23 @@ export class DualTimelineEngine {
   _hitTestTracks(x, y, w, h) {
     const lay = this._getTrackLayout(h);
     if (y < lay.hRuler) {
+      // 优先检测标尺底部的 OBS 章节翡翠绿菱形标记
+      if (this.chapters.length > 0 && y >= 4) {
+        let bestCh = null;
+        let bestDx = 9;
+        for (const ch of this.chapters) {
+          const cx = this._timeToTrackX(Number(ch.start_sec) || 0, w);
+          if (cx < -10 || cx > w + 10) continue;
+          const dx = Math.abs(x - cx);
+          if (dx <= bestDx) {
+            bestDx = dx;
+            bestCh = ch;
+          }
+        }
+        if (bestCh) {
+          return { zone: "chapter", chapter: bestCh, sec: Number(bestCh.start_sec) || 0 };
+        }
+      }
       return { zone: "ruler", sec: this._trackXToTime(x, w) };
     }
 
@@ -508,8 +581,29 @@ export class DualTimelineEngine {
       return { zone: "v1-empty", sec: this._trackXToTime(x, w) };
     }
 
-    // 命中 A1 波形轨
+    // 命中 A1 波形轨（优先命中顶部弹幕爆点锚点）
     if (lay.hA1 > 0 && y >= lay.topA1 && y < lay.topA1 + lay.hA1) {
+      const chatPeaks = this.chatRadar?.chat_peaks || [];
+      if (chatPeaks.length > 0 && y <= lay.topA1 + 18) {
+        let bestPeak = null;
+        let bestDx = 9;
+        for (const cp of chatPeaks) {
+          const px = this._timeToTrackX(Number(cp.peak_sec ?? cp.start_sec) || 0, w);
+          if (px < -10 || px > w + 10) continue;
+          const dx = Math.abs(x - px);
+          if (dx <= bestDx) {
+            bestDx = dx;
+            bestPeak = cp;
+          }
+        }
+        if (bestPeak) {
+          return {
+            zone: "chat-peak",
+            peak: bestPeak,
+            sec: Number(bestPeak.peak_sec ?? bestPeak.start_sec) || 0,
+          };
+        }
+      }
       return { zone: "a1", sec: this._trackXToTime(x, w) };
     }
 
@@ -644,7 +738,7 @@ export class DualTimelineEngine {
       c.style.cursor = "ew-resize";
     } else if (h.zone === "ruler") {
       c.style.cursor = "ew-resize";
-    } else if (h.zone === "v1-clip" || h.zone === "t1-sub") {
+    } else if (h.zone === "v1-clip" || h.zone === "t1-sub" || h.zone === "chapter" || h.zone === "chat-peak") {
       c.style.cursor = "pointer";
     } else {
       c.style.cursor = "default";
@@ -709,6 +803,26 @@ export class DualTimelineEngine {
           this.onSeek?.(sec);
           this.requestDraw();
         }
+        return;
+      }
+
+      // 单击 OBS 章节标记：跳播到章节起点
+      if (hit.zone === "chapter") {
+        const sec = clamp(Number(hit.chapter.start_sec) || 0, 0, this.duration || 86400);
+        this.currentTime = sec;
+        this.onSeek?.(sec);
+        this.onChapterClick?.(hit.chapter);
+        this.requestDraw();
+        return;
+      }
+
+      // 单击弹幕爆点锚点：跳播到爆点时刻
+      if (hit.zone === "chat-peak") {
+        const sec = clamp(Number(hit.peak.peak_sec ?? hit.peak.start_sec) || 0, 0, this.duration || 86400);
+        this.currentTime = sec;
+        this.onSeek?.(sec);
+        this.onChatPeakClick?.(hit.peak);
+        this.requestDraw();
         return;
       }
 
@@ -781,9 +895,23 @@ export class DualTimelineEngine {
       const h = Math.max(1, r.height);
 
       if (!this._trkDrag) {
+        const prevZone = this._hoverInfo?.zone;
+        const prevCh = this._hoverInfo?.chapter;
+        const prevPeak = this._hoverInfo?.peak;
         this._hoverInfo = this._hitTestTracks(x, y, w, h);
         this._updateCursor();
-        if (this.tool === "razor") this.requestDraw();
+        const hoverMarkerChanged =
+          prevZone !== this._hoverInfo?.zone ||
+          prevCh !== this._hoverInfo?.chapter ||
+          prevPeak !== this._hoverInfo?.peak;
+        if (
+          this.tool === "razor" ||
+          hoverMarkerChanged ||
+          this._hoverInfo?.zone === "chapter" ||
+          this._hoverInfo?.zone === "chat-peak"
+        ) {
+          this.requestDraw();
+        }
         return;
       }
 
@@ -887,7 +1015,13 @@ export class DualTimelineEngine {
       e.stopPropagation();
       const r = c.getBoundingClientRect();
       const hit = this._hitTestTracks(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
-      if (hit.zone === "v1-clip") {
+      if (hit.zone === "chapter") {
+        this.onChapterContextMenu?.(e, hit.chapter);
+      } else if (hit.zone === "ruler") {
+        this.onRulerContextMenu?.(e, hit.sec);
+      } else if (hit.zone === "chat-peak") {
+        this.onChatPeakContextMenu?.(e, hit.peak);
+      } else if (hit.zone === "v1-clip") {
         this.onClipContextMenu?.(e, hit.clip);
       } else if (hit.zone === "t1-sub") {
         this.onSubtitleContextMenu?.(e, hit.clip, hit.sub, hit.subIndex);
@@ -925,7 +1059,19 @@ export class DualTimelineEngine {
     ctx.fillStyle = "#101012";
     ctx.fillRect(0, 0, w, h);
 
-    // 1. 底层全片能量轮廓
+    // 1. 底层全片 Dead Air 死寂空白区灰显
+    if (this.deadAirSegments.length > 0) {
+      ctx.fillStyle = "rgba(130, 134, 144, 0.16)";
+      for (const seg of this.deadAirSegments) {
+        const dx1 = this._timeToOverviewX(Number(seg.start_sec) || 0, w);
+        const dx2 = this._timeToOverviewX(Number(seg.end_sec) || 0, w);
+        if (dx2 > dx1) {
+          ctx.fillRect(dx1, 0, Math.max(1.5, dx2 - dx1), h);
+        }
+      }
+    }
+
+    // 1b. 底层全片能量轮廓
     const wf = this.overviewWave;
     if (wf && Array.isArray(wf.peak) && wf.peak.length > 0) {
       const peaks = wf.peak;
@@ -943,19 +1089,75 @@ export class DualTimelineEngine {
       }
     }
 
+    // 1c. 弹幕热力图曲线叠加（紫青半透明面积 + 顶线 + 梗词命中高亮）
+    const chatBuckets = this.chatRadar?.buckets;
+    if (Array.isArray(chatBuckets) && chatBuckets.length > 0) {
+      ctx.save();
+      ctx.beginPath();
+      let started = false;
+      let lastX = 0;
+      for (const b of chatBuckets) {
+        const midSec = ((Number(b.start_sec) || 0) + (Number(b.end_sec) || Number(b.start_sec) || 0)) * 0.5;
+        const bx = this._timeToOverviewX(midSec, w);
+        const norm = clamp(Number(b.norm) || 0, 0, 1);
+        const by = h - 2 - norm * (h - 7);
+        if (!started) {
+          ctx.moveTo(bx, h - 2);
+          ctx.lineTo(bx, by);
+          started = true;
+        } else {
+          ctx.lineTo(bx, by);
+        }
+        lastX = bx;
+      }
+      if (started) {
+        ctx.lineTo(lastX, h - 2);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(139, 92, 246, 0.28)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(34, 211, 238, 0.68)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      const searchCurve = this.chatRadar?.search?.curve;
+      if (Array.isArray(searchCurve) && searchCurve.length > 0) {
+        ctx.fillStyle = "rgba(56, 189, 248, 0.72)";
+        for (const sb of searchCurve) {
+          if (!(Number(sb.hits) > 0)) continue;
+          const sx1 = this._timeToOverviewX(Number(sb.start_sec) || 0, w);
+          const sx2 = this._timeToOverviewX(Number(sb.end_sec) || Number(sb.start_sec) + 2, w);
+          const sh = Math.max(2, clamp(Number(sb.norm) || 0, 0, 1) * (h - 6));
+          ctx.fillRect(sx1, h - 2 - sh, Math.max(2, sx2 - sx1), sh);
+        }
+      }
+      ctx.restore();
+    }
+
     // 2. 全片高光切片色带
     for (const item of this.highlights) {
       const x1 = this._timeToOverviewX(Number(item.start_sec) || 0, w);
       const x2 = this._timeToOverviewX(Number(item.end_sec) || 0, w);
       const bw = Math.max(2.5, x2 - x1);
       const isSelected = item.selected !== false;
+      const isReviewed = String(item.review_status || "draft").toLowerCase() === "reviewed";
       const isActive = this.activeClipRank !== null && Number(item.rank) === Number(this.activeClipRank);
       ctx.fillStyle = isActive
         ? "rgba(217, 155, 56, 0.85)"
         : isSelected
-          ? "rgba(195, 146, 62, 0.45)"
+          ? isReviewed
+            ? "rgba(55, 168, 85, 0.62)"
+            : "rgba(195, 146, 62, 0.45)"
           : "rgba(110, 114, 126, 0.35)";
       ctx.fillRect(x1, 3, bw, 6);
+    }
+
+    // 2b. OBS 章节翡翠绿微针
+    if (this.chapters.length > 0) {
+      ctx.fillStyle = "#34d399";
+      for (const ch of this.chapters) {
+        const cx = Math.round(this._timeToOverviewX(Number(ch.start_sec) || 0, w));
+        ctx.fillRect(cx - 1, 0, 2, 4);
+      }
     }
 
     // 3. 当前可视窗滑框（Viewport Handle）
@@ -980,10 +1182,131 @@ export class DualTimelineEngine {
     ctx.fillRect(Math.round(playX) - 0.5, 0, 1.5, h);
   }
 
+  _drawDeadAirOverlay(ctx, w, topY, trackH) {
+    if (!this.deadAirSegments.length || trackH <= 0) return;
+    ctx.save();
+    for (const seg of this.deadAirSegments) {
+      const s = Number(seg.start_sec) || 0;
+      const e = Number(seg.end_sec) || s;
+      if (e < this.viewStart || s > this.viewEnd || e <= s) continue;
+      const x1 = Math.max(0, this._timeToTrackX(s, w));
+      const x2 = Math.min(w, this._timeToTrackX(e, w));
+      const bw = x2 - x1;
+      if (bw < 1.5) continue;
+
+      ctx.fillStyle = "rgba(116, 120, 132, 0.14)";
+      ctx.fillRect(x1, topY, bw, trackH);
+
+      // 克制 45° 斜纹暗灰线（仅在区域足够宽时绘制，性能极致）
+      if (bw >= 6) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x1, topY, bw, trackH);
+        ctx.clip();
+        ctx.strokeStyle = "rgba(156, 162, 174, 0.16)";
+        ctx.lineWidth = 1;
+        const step = 9;
+        ctx.beginPath();
+        for (let sx = x1 - trackH; sx < x2 + step; sx += step) {
+          ctx.moveTo(sx, topY + trackH);
+          ctx.lineTo(sx + trackH, topY);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  _drawChatRadarInTrack(ctx, w, topY, trackH) {
+    if (!this.chatRadar || trackH <= 0) return;
+    const buckets = this.chatRadar.buckets;
+    if (Array.isArray(buckets) && buckets.length > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, topY, w, trackH);
+      ctx.clip();
+
+      const usableH = Math.max(12, trackH - 8);
+      const baseY = topY + trackH - 2;
+      let started = false;
+      let firstX = 0;
+      let lastX = 0;
+
+      ctx.beginPath();
+      for (const b of buckets) {
+        const bs = Number(b.start_sec) || 0;
+        const be = Number(b.end_sec) || bs;
+        if (be < this.viewStart - 30 || bs > this.viewEnd + 30) continue;
+        const midX = this._timeToTrackX((bs + be) * 0.5, w);
+        const norm = clamp(Number(b.norm) || 0, 0, 1);
+        const y = baseY - norm * usableH;
+        if (!started) {
+          firstX = midX;
+          ctx.moveTo(midX, y);
+          started = true;
+        } else {
+          ctx.lineTo(midX, y);
+        }
+        lastX = midX;
+      }
+
+      if (started) {
+        ctx.strokeStyle = "rgba(34, 211, 238, 0.72)";
+        ctx.lineWidth = 1.25;
+        ctx.stroke();
+
+        ctx.lineTo(lastX, baseY);
+        ctx.lineTo(firstX, baseY);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(139, 92, 246, 0.20)";
+        ctx.fill();
+      }
+
+      // 梗词搜索命中曲线（亮青色柱）
+      const searchCurve = this.chatRadar.search?.curve;
+      if (Array.isArray(searchCurve) && searchCurve.length > 0) {
+        ctx.fillStyle = "rgba(56, 189, 248, 0.45)";
+        for (const sb of searchCurve) {
+          if (!(Number(sb.hits) > 0)) continue;
+          const ss = Number(sb.start_sec) || 0;
+          const se = Number(sb.end_sec) || ss + 1;
+          if (se < this.viewStart || ss > this.viewEnd) continue;
+          const sx1 = Math.max(0, this._timeToTrackX(ss, w));
+          const sx2 = Math.min(w, this._timeToTrackX(se, w));
+          const sh = Math.max(3, clamp(Number(sb.norm) || 0, 0, 1) * usableH);
+          ctx.fillRect(sx1, baseY - sh, Math.max(2.5, sx2 - sx1), sh);
+        }
+      }
+
+      // Top 弹幕爆点锚点（A1 顶部紫青/琥珀圆点）
+      const chatPeaks = this.chatRadar.chat_peaks || [];
+      for (const cp of chatPeaks) {
+        const pSec = Number(cp.peak_sec ?? cp.start_sec) || 0;
+        if (pSec < this.viewStart || pSec > this.viewEnd) continue;
+        const px = this._timeToTrackX(pSec, w);
+        const isHov = this._hoverInfo?.zone === "chat-peak" && this._hoverInfo.peak === cp;
+        const cy = topY + 8;
+        ctx.beginPath();
+        ctx.arc(px, cy, isHov ? 4.5 : 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = isHov ? "#67e8f9" : "#a78bfa";
+        ctx.fill();
+        ctx.strokeStyle = "#0e1726";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+  }
+
   _drawWaveformInTrack(ctx, w, topY, trackH) {
     const midY = topY + trackH / 2;
     ctx.fillStyle = "#121215";
     ctx.fillRect(0, topY, w, trackH);
+
+    // Dead Air 死寂空白区暗灰斜纹标注
+    this._drawDeadAirOverlay(ctx, w, topY, trackH);
 
     // 中轴参考线
     ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
@@ -1002,10 +1325,16 @@ export class DualTimelineEngine {
     }
 
     if (!src || !Array.isArray(src.peak) || src.peak.length === 0) {
-      ctx.fillStyle = "#4d4d56";
-      ctx.font = '10px "Segoe UI", sans-serif';
-      ctx.textAlign = "center";
-      ctx.fillText("等待音频波形（执行体检或粗筛后自动展示）", w / 2, midY + 4);
+      this._drawChatRadarInTrack(ctx, w, topY, trackH);
+      if (!this.chatRadar) {
+        ctx.fillStyle = "#4d4d56";
+        ctx.font = '10px "Segoe UI", sans-serif';
+        ctx.textAlign = "center";
+        const waitMsg = window.SolacutI18n
+          ? window.SolacutI18n.t("tl.waitWave")
+          : "Waiting for audio waveform";
+        ctx.fillText(waitMsg, w / 2, midY + 4);
+      }
       return;
     }
 
@@ -1072,6 +1401,9 @@ export class DualTimelineEngine {
       ctx.stroke();
       ctx.restore();
     }
+
+    // 叠加弹幕热力图曲线与 Top 爆点锚点
+    this._drawChatRadarInTrack(ctx, w, topY, trackH);
   }
 
   _drawTracks() {
@@ -1127,6 +1459,42 @@ export class DualTimelineEngine {
       }
     }
 
+    /* ---------- 1b. OBS 章节翡翠绿菱形标记 ---------- */
+    if (this.chapters.length > 0) {
+      for (const ch of this.chapters) {
+        const cs = Number(ch.start_sec) || 0;
+        if (cs < this.viewStart || cs > this.viewEnd) continue;
+        const cx = Math.round(this._timeToTrackX(cs, w)) + 0.5;
+        const isHov = this._hoverInfo?.zone === "chapter" && this._hoverInfo.chapter === ch;
+
+        // 向下投射极淡翡翠绿参考线
+        ctx.save();
+        ctx.strokeStyle = isHov ? "rgba(52, 211, 153, 0.52)" : "rgba(52, 211, 153, 0.16)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(cx, lay.hRuler);
+        ctx.lineTo(cx, h);
+        ctx.stroke();
+        ctx.restore();
+
+        // 标尺底部菱形
+        const cy = lay.hRuler - 6;
+        const rad = isHov ? 5.2 : 4.2;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - rad);
+        ctx.lineTo(cx + rad, cy);
+        ctx.lineTo(cx, cy + rad);
+        ctx.lineTo(cx - rad, cy);
+        ctx.closePath();
+        ctx.fillStyle = isHov ? "#6ee7b7" : "#34d399";
+        ctx.fill();
+        ctx.strokeStyle = "#052e22";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
     /* ---------- 2. V1 高光切片轨 ---------- */
     if (lay.hV1 > 0) {
       ctx.fillStyle = "#16161a";
@@ -1147,6 +1515,7 @@ export class DualTimelineEngine {
         const bh = lay.hV1 - 11;
 
         const isSelected = item.selected !== false;
+        const isReviewed = String(item.review_status || "draft").toLowerCase() === "reviewed";
         const isActive = this.activeClipRank !== null && Number(item.rank) === Number(this.activeClipRank);
         const isHovered = this._hoverInfo?.zone === "v1-clip" && this._hoverInfo.clip === item;
 
@@ -1154,16 +1523,20 @@ export class DualTimelineEngine {
         ctx.fillStyle = isActive
           ? "rgba(217, 155, 56, 0.28)"
           : isSelected
-            ? "rgba(88, 122, 158, 0.30)"
+            ? isReviewed
+              ? "rgba(55, 168, 85, 0.22)"
+              : "rgba(88, 122, 158, 0.30)"
             : "rgba(68, 68, 76, 0.26)";
         ctx.fillRect(drawX, y, drawW, bh);
 
-        // 顶部色带细条
-        ctx.fillStyle = isActive
-          ? "#d99b38"
-          : isSelected
-            ? "#6e92b8"
-            : "#52525c";
+        // 顶部色带细条（已人工校对呈翡翠绿）
+        ctx.fillStyle = isReviewed
+          ? "#37a855"
+          : isActive
+            ? "#d99b38"
+            : isSelected
+              ? "#6e92b8"
+              : "#52525c";
         ctx.fillRect(drawX, y, drawW, 2.5);
 
         // 描边
@@ -1194,14 +1567,42 @@ export class DualTimelineEngine {
           ctx.clip();
           ctx.font = '600 11px "Segoe UI", "Microsoft YaHei UI", sans-serif';
           ctx.fillStyle = isSelected ? "#e8e8ec" : "#8b8b96";
-          const label = `#${item.rank} ${item.title_zh || item.title_en || ""}`;
+          const labelPrefix = isReviewed ? "✓ " : "";
+          const label = `${labelPrefix}#${item.rank} ${item.title_tgt || item.title_zh || item.title_src || item.title_en || ""}`;
           ctx.fillText(label, drawX + 5, y + 16);
 
           if (drawW >= 95) {
             ctx.font = '10px "Cascadia Mono", Consolas, monospace';
             ctx.fillStyle = "#9696a2";
             const dur = Math.max(0, e - s).toFixed(1);
-            ctx.fillText(`${Number(item.score || 0).toFixed(1)}分 · ${dur}s`, drawX + 5, y + 28);
+            const hasScore =
+              item.score !== null &&
+              item.score !== undefined &&
+              item.score !== "" &&
+              Number.isFinite(Number(item.score));
+            let metaText = "";
+            if (hasScore) {
+              const scoreStr = Number(item.score).toFixed(1);
+              metaText = window.SolacutI18n
+                ? window.SolacutI18n.t("tl.scoreDur", { score: scoreStr, dur })
+                : `${scoreStr} pts · ${dur}s`;
+            } else {
+              const srcRaw = String(item.source || "").trim().toLowerCase();
+              const srcTag =
+                srcRaw === "obs_chapter"
+                  ? "OBS"
+                  : srcRaw === "chat_peak"
+                    ? "CHAT"
+                    : srcRaw === "transcript"
+                      ? "TR"
+                      : srcRaw === "manual"
+                        ? "MAN"
+                        : "—";
+              metaText = window.SolacutI18n
+                ? window.SolacutI18n.t("tl.srcDur", { src: srcTag, dur })
+                : `${srcTag} · ${dur}s`;
+            }
+            ctx.fillText(metaText, drawX + 5, y + 28);
           }
           ctx.restore();
         }
@@ -1259,7 +1660,7 @@ export class DualTimelineEngine {
             ctx.clip();
             ctx.font = '10.5px "Segoe UI", "Microsoft YaHei UI", sans-serif';
             ctx.fillStyle = isCur ? "#f5f5f7" : "#c6c8d0";
-            ctx.fillText((s.text_tgt || s.text_zh || s.text_en || "").trim(), drawX + 4, subY + 16);
+            ctx.fillText((s.text_tgt || s.text_zh || s.text_src || s.text_en || "").trim(), drawX + 4, subY + 16);
             ctx.restore();
           }
         }
@@ -1332,6 +1733,47 @@ export class DualTimelineEngine {
       ctx.font = '600 10px "Cascadia Mono", Consolas, monospace';
       ctx.textAlign = "center";
       ctx.fillText(label, tx, lay.hRuler + 14.5);
+    }
+
+    /* ---------- 9. 悬停 OBS 章节 / 弹幕爆点 暗房浮动 Tooltip ---------- */
+    if (!this._trkDrag && (this._hoverInfo?.zone === "chapter" || this._hoverInfo?.zone === "chat-peak")) {
+      let tipText = "";
+      let anchorSec = 0;
+      let accentColor = "#34d399";
+      let tipY = lay.hRuler + 4;
+      if (this._hoverInfo.zone === "chapter") {
+        const ch = this._hoverInfo.chapter;
+        anchorSec = Number(ch.start_sec) || 0;
+        tipText = `◆ ${ch.title || `Chapter ${ch.index}`} · ${formatRulerClock(anchorSec)}`;
+        accentColor = "#34d399";
+        tipY = lay.hRuler + 4;
+      } else if (this._hoverInfo.zone === "chat-peak") {
+        const cp = this._hoverInfo.peak;
+        anchorSec = Number(cp.peak_sec ?? cp.start_sec) || 0;
+        const terms = Array.isArray(cp.top_terms) && cp.top_terms.length ? ` · ${cp.top_terms.slice(0, 3).join(", ")}` : "";
+        tipText = `⚡ ${cp.msg_count || 0} msg (z=${Number(cp.z_score || 0).toFixed(1)})${terms} · ${formatRulerClock(anchorSec)}`;
+        accentColor = "#22d3ee";
+        tipY = lay.topA1 + 16;
+      }
+      if (tipText) {
+        ctx.save();
+        ctx.font = '500 10.5px "Segoe UI", "Microsoft YaHei UI", sans-serif';
+        const metrics = ctx.measureText(tipText);
+        const boxW = Math.min(w - 12, Math.ceil(metrics.width) + 14);
+        const boxH = 19;
+        const rawX = this._timeToTrackX(anchorSec, w) - boxW / 2;
+        const bx = clamp(rawX, 6, Math.max(6, w - boxW - 6));
+        const by = clamp(tipY, lay.hRuler + 2, Math.max(lay.hRuler + 2, h - boxH - 4));
+        ctx.fillStyle = "rgba(16, 16, 20, 0.94)";
+        ctx.fillRect(bx, by, boxW, boxH);
+        ctx.strokeStyle = accentColor;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx + 0.5, by + 0.5, boxW - 1, boxH - 1);
+        ctx.fillStyle = "#ececf0";
+        ctx.textAlign = "left";
+        ctx.fillText(tipText, bx + 7, by + 13);
+        ctx.restore();
+      }
     }
   }
 }

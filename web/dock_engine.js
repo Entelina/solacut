@@ -76,12 +76,12 @@ export function createPresetTree(presetId) {
           "v",
           0.52,
           makeTabs(["clips"], "clips"),
-          makeTabs(["subtitles", "queue"], "subtitles")
+          makeTabs(["subtitles", "transcript", "queue"], "subtitles")
         )
       );
 
     case "subtitle":
-      // 字幕精校模式：左上监视器 + 左下多轨时间线 | 右半全高双语字幕与高光索引
+      // 字幕精校模式：左上监视器 + 左下多轨时间线 | 右半全高双语字幕与全片逐字稿
       return makeSplit(
         "h",
         0.5,
@@ -95,12 +95,12 @@ export function createPresetTree(presetId) {
           "v",
           0.32,
           makeTabs(["clips"], "clips"),
-          makeTabs(["subtitles", "inspector"], "subtitles")
+          makeTabs(["subtitles", "transcript", "inspector"], "subtitles")
         )
       );
 
     case "deliver":
-      // 交付模式：左媒体池 | 中上监视器 + 中下时间线/高光 | 右上检查器(交付) + 右下队列
+      // 交付模式：左媒体池 | 中上监视器 + 中下时间线/高光/字幕/逐字稿 | 右上检查器(交付) + 右下队列
       return makeSplit(
         "h",
         0.18,
@@ -112,7 +112,7 @@ export function createPresetTree(presetId) {
             "v",
             0.54,
             makeTabs(["monitor"], "monitor"),
-            makeTabs(["timeline", "clips", "subtitles"], "timeline")
+            makeTabs(["timeline", "clips", "subtitles", "transcript"], "timeline")
           ),
           makeSplit(
             "v",
@@ -125,7 +125,7 @@ export function createPresetTree(presetId) {
 
     case "edit":
     default:
-      // 剪辑默认模式（对标 DaVinci Edit Page）：上层 媒体池 | 节目监视器 | 检查器，下层 双层多轨时间线 | 高光&字幕
+      // 剪辑默认模式（对标 DaVinci Edit Page）：上层 媒体池 | 节目监视器 | 检查器，下层 双层多轨时间线 | 高光&字幕&逐字稿
       return makeSplit(
         "v",
         0.55,
@@ -144,7 +144,7 @@ export function createPresetTree(presetId) {
           "h",
           0.62,
           makeTabs(["timeline"], "timeline"),
-          makeTabs(["clips", "subtitles"], "clips")
+          makeTabs(["clips", "subtitles", "transcript"], "clips")
         )
       );
   }
@@ -227,13 +227,28 @@ export class DockEngine {
     this.activePreset =
       saved && validPresets.includes(saved.activePreset) ? saved.activePreset : "edit";
 
+    const needsTranscriptMigration =
+      Boolean(saved) && Number(saved.version || 0) < 3 && this.panelMap.has("transcript");
+
     this.presetTrees = {};
     for (const pid of validPresets) {
       const candidate = saved?.presetTrees?.[pid];
       const normalized = candidate ? this._normalizeTree(deepClone(candidate)) : null;
-      this.presetTrees[pid] = normalized || createPresetTree(pid);
+      const tree = normalized || createPresetTree(pid);
+      if (needsTranscriptMigration && !this._findTabsNodeContaining("transcript", tree)) {
+        const targetGroup =
+          this._findTabsNodeContaining("subtitles", tree) ||
+          this._findTabsNodeContaining("clips", tree);
+        if (targetGroup && !targetGroup.tabs.includes("transcript")) {
+          targetGroup.tabs.push("transcript");
+        }
+      }
+      this.presetTrees[pid] = tree;
     }
     this.tree = this.presetTrees[this.activePreset];
+    if (needsTranscriptMigration) {
+      this._saveState();
+    }
   }
 
   _saveState() {
@@ -244,7 +259,7 @@ export class DockEngine {
       localStorage.setItem(
         STORAGE_KEY_V2,
         JSON.stringify({
-          version: 2,
+          version: 3,
           activePreset: this.activePreset,
           presetTrees: this.presetTrees,
         })
@@ -645,17 +660,18 @@ export class DockEngine {
       titleSpan.textContent = panel.title;
       badge.appendChild(titleSpan);
 
+      const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
       const hint = document.createElement("span");
       hint.className = "dock-max-hint mono-num";
-      hint.textContent = "MAX · ` 还原";
+      hint.textContent = t("dock.maxHint");
 
       const actions = document.createElement("div");
       actions.className = "dock-pane-actions";
       const restoreBtn = document.createElement("button");
       restoreBtn.type = "button";
       restoreBtn.className = "dock-icon-btn active";
-      restoreBtn.title = "还原面板 ( ` / Esc )";
-      restoreBtn.setAttribute("aria-label", "还原面板");
+      restoreBtn.title = t("dock.restoreTitle");
+      restoreBtn.setAttribute("aria-label", t("dock.restorePanel"));
       restoreBtn.innerHTML =
         '<svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5.5 2v3.5H2M8.5 12V8.5H12M12 5.5H8.5V2M2 8.5h3.5V12"/></svg>';
       restoreBtn.addEventListener("click", () => this.toggleMaximize(this.maximizedPanelId));
@@ -767,7 +783,8 @@ export class DockEngine {
         tabBtn.setAttribute("aria-selected", isActive ? "true" : "false");
         tabBtn.dataset.panelId = panelId;
         tabBtn.dataset.nodeId = node.id;
-        tabBtn.title = `${panel.title}（拖动标签可自由停靠或合并，悬停按 \` 最大化）`;
+        const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
+        tabBtn.title = t("dock.tabTooltip", { title: panel.title });
 
         const label = document.createElement("span");
         label.className = "dock-tab-label";
@@ -801,14 +818,16 @@ export class DockEngine {
         tabList.appendChild(tabBtn);
       });
 
+      const tDock = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
       const actions = document.createElement("div");
       actions.className = "dock-pane-actions";
 
       const maxBtn = document.createElement("button");
       maxBtn.type = "button";
       maxBtn.className = "dock-icon-btn";
-      maxBtn.title = "最大化面板 ( ` )";
-      maxBtn.setAttribute("aria-label", "最大化面板");
+      maxBtn.dataset.dockAction = "max";
+      maxBtn.title = tDock("dock.maximizeTitle");
+      maxBtn.setAttribute("aria-label", tDock("dock.maximizePanel"));
       maxBtn.innerHTML =
         '<svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 5.5V2h3.5M8.5 2H12v3.5M12 8.5V12H8.5M5.5 12H2V8.5"/></svg>';
       maxBtn.addEventListener("click", (e) => {
@@ -821,8 +840,9 @@ export class DockEngine {
         const closeBtn = document.createElement("button");
         closeBtn.type = "button";
         closeBtn.className = "dock-icon-btn";
-        closeBtn.title = "隐藏面板（可从顶栏「面板」重新打开）";
-        closeBtn.setAttribute("aria-label", "隐藏面板");
+        closeBtn.dataset.dockAction = "hide";
+        closeBtn.title = tDock("dock.hideTitle");
+        closeBtn.setAttribute("aria-label", tDock("dock.hidePanel"));
         closeBtn.innerHTML =
           '<svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3l8 8M11 3l-8 8"/></svg>';
         closeBtn.addEventListener("click", (e) => {
@@ -1134,6 +1154,44 @@ export class DockEngine {
     this._dropOverlay.style.top = `${Math.round(hit.rect.top)}px`;
     this._dropOverlay.style.width = `${Math.max(12, Math.round(hit.rect.width))}px`;
     this._dropOverlay.style.height = `${Math.max(12, Math.round(hit.rect.height))}px`;
+  }
+
+  /** 原地更新面板标题与提示文案，绝不重建 DOM 破坏视频播放状态 */
+  updatePanelTitles(titleMap) {
+    if (!titleMap || typeof titleMap !== "object") return;
+    const t = (k, vars) => (window.SolacutI18n ? window.SolacutI18n.t(k, vars) : k);
+    for (const [id, title] of Object.entries(titleMap)) {
+      const panel = this.panelMap.get(id);
+      if (panel && title) panel.title = title;
+    }
+    this.rootEl?.querySelectorAll(".dock-tab[data-panel-id]").forEach((tabBtn) => {
+      const pid = tabBtn.dataset.panelId;
+      const panel = this.panelMap.get(pid);
+      if (!panel) return;
+      const lbl = tabBtn.querySelector(".dock-tab-label");
+      if (lbl) lbl.textContent = panel.title;
+      tabBtn.title = t("dock.tabTooltip", { title: panel.title });
+    });
+    this.rootEl?.querySelectorAll('.dock-icon-btn[data-dock-action="max"]').forEach((btn) => {
+      btn.title = t("dock.maximizeTitle");
+      btn.setAttribute("aria-label", t("dock.maximizePanel"));
+    });
+    this.rootEl?.querySelectorAll('.dock-icon-btn[data-dock-action="hide"]').forEach((btn) => {
+      btn.title = t("dock.hideTitle");
+      btn.setAttribute("aria-label", t("dock.hidePanel"));
+    });
+    if (this.maximizedPanelId && this._maxOverlay) {
+      const panel = this.panelMap.get(this.maximizedPanelId);
+      const titleNode = this._maxOverlay.querySelector(".dock-max-title");
+      if (titleNode && panel) titleNode.textContent = panel.title;
+      const hintNode = this._maxOverlay.querySelector(".dock-max-hint");
+      if (hintNode) hintNode.textContent = t("dock.maxHint");
+      const restoreBtn = this._maxOverlay.querySelector(".dock-pane-actions button");
+      if (restoreBtn) {
+        restoreBtn.title = t("dock.restoreTitle");
+        restoreBtn.setAttribute("aria-label", t("dock.restorePanel"));
+      }
+    }
   }
 
   _bindGlobalEvents() {
