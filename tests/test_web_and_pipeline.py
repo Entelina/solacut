@@ -1868,21 +1868,254 @@ class TestWebAndPipeline(unittest.TestCase):
                     time_mod.sleep(0.1)
                     self.assertFalse(test_lock.locked())
 
-            # 10. scripts/build_release.py 审计门禁新增音视频后缀 + hidden-imports + 默认版本号 v0.9.2-beta
+            # 10. scripts/build_release.py 审计门禁新增音视频后缀 + hidden-imports + 默认版本号 v0.9.4-beta + 拦截 .window_state.json
             audit_dir = tmp / "release_stage"
             audit_dir.mkdir()
             for leaked_media in ("clip.m4a", "voice.mp3", "stream.ts", "vod.webm", "rec.m4v"):
                 (audit_dir / leaked_media).write_bytes(b"media")
+            (audit_dir / ".window_state.json").write_text('{"width": 1440, "height": 860}', encoding="utf-8")
             violations = build_release.run_security_audit(audit_dir)
             for leaked_media in ("clip.m4a", "voice.mp3", "stream.ts", "vod.webm", "rec.m4v"):
                 self.assertTrue(
                     any(leaked_media in v for v in violations),
                     f"build_release 安全审计未拦截个人媒体后缀 {leaked_media}: {violations}",
                 )
+            self.assertTrue(
+                any(".window_state.json" in v for v in violations),
+                f"build_release 安全审计未拦截 .window_state.json: {violations}",
+            )
             br_src = (PROJECT_ROOT / "scripts" / "build_release.py").read_text(encoding="utf-8")
             self.assertIn('"src.nle_export"', br_src)
             self.assertIn('"src.chat_radar"', br_src)
-            self.assertIn('default="v0.9.2-beta"', br_src)
+            self.assertIn('default="v0.9.4-beta"', br_src)
+
+    def test_scan_cache_token_demo_refresh_video_stream_no_cache_and_release_audit(self) -> None:
+        """验证 cache_token、Demo 资产热更新/时间戳刷新/波形清缓存、视频流 no-cache 及发布审计。"""
+        import time as time_mod
+        from scripts import build_release
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            in_dir = tmp / "in"
+            out_dir = tmp / "out"
+            fake_demo = tmp / "demo_assets"
+            in_dir.mkdir()
+            out_dir.mkdir()
+            fake_demo.mkdir()
+
+            # 1. 验证 scan_input_videos 返回精确 cache_token 且替换同名视频/WAV后实时改变
+            v_path = in_dir / "match.mp4"
+            v_path.write_bytes(b"first-video-payload")
+            items_1 = scan_input_videos(in_dir, out_dir)
+            self.assertEqual(len(items_1), 1)
+            item_1 = items_1[0]
+            self.assertEqual(item_1["video_size"], len(b"first-video-payload"))
+            self.assertGreater(item_1["video_mtime_ns"], 0)
+            self.assertEqual(item_1["wav_mtime_ns"], 0)
+            self.assertEqual(item_1["hl_mtime_ns"], 0)
+            expected_tok_1 = f"{item_1['video_mtime_ns']}_{item_1['video_size']}_0"
+            self.assertEqual(item_1["cache_token"], expected_tok_1)
+
+            wav_path = out_dir / "match_16k.wav"
+            wav_path.write_bytes(b"RIFF0000WAVE")
+            v_path.write_bytes(b"replaced-longer-video-payload")
+            items_2 = scan_input_videos(in_dir, out_dir)
+            item_2 = items_2[0]
+            self.assertGreater(item_2["wav_mtime_ns"], 0)
+            self.assertNotEqual(item_2["cache_token"], item_1["cache_token"])
+
+            # 2. 构造带历史陈旧 mtime 的内置 Demo 资产，测试 api_load_demo_project 刷新 mtime、清旧波形与预热弹幕
+            src_demo_mp4 = fake_demo / "demo_highlight_30s.mp4"
+            src_demo_wav = fake_demo / "demo_highlight_30s_16k.wav"
+            src_demo_peaks = fake_demo / "demo_highlight_30s_audio_peaks.json"
+            src_demo_hl = fake_demo / "demo_highlight_30s_highlights.json"
+            src_demo_chat = fake_demo / "demo_highlight_30s_chat.json"
+
+            src_demo_mp4.write_bytes(b"NEW_DEMO_VIDEO_BYTES_V2")
+            with wave.open(str(src_demo_wav), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 1600)
+            src_demo_peaks.write_text(
+                json.dumps(
+                    {
+                        "total_duration_sec": 30.0,
+                        "rms_threshold": 0.05,
+                        "peak_segments": [{"start_sec": 10.0, "end_sec": 14.0, "peak_rms": 0.25}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            src_demo_hl.write_text(
+                json.dumps(
+                    {
+                        "video_path": "input/demo_highlight_30s.mp4",
+                        "wav_path": "output/demo_highlight_30s_16k.wav",
+                        "model": "demo-preset",
+                        "total_duration_sec": 30.0,
+                        "highlights": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            src_demo_chat.write_text(
+                json.dumps([{"time_sec": 11.0, "text": "GGWP clutch!", "author": "viewer1"}]),
+                encoding="utf-8",
+            )
+            old_ts = 1577836800.0  # 2020-01-01
+            os.utime(src_demo_mp4, (old_ts, old_ts))
+            os.utime(src_demo_wav, (old_ts, old_ts))
+
+            # 预埋工作区旧波形概览与旧 review.md
+            stale_overview = out_dir / "demo_highlight_30s_waveform_overview.json"
+            stale_review = out_dir / "demo_highlight_30s_review.md"
+            stale_overview.write_text('{"stale": true}', encoding="utf-8")
+            stale_review.write_text("# stale", encoding="utf-8")
+
+            cfg_path = tmp / "cfg.json"
+            cfg_path.write_text(
+                json.dumps({"input_dir": str(in_dir), "output_dir": str(out_dir)}),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(web_app, "_CONFIG_PATH", cfg_path),
+                patch.object(web_app, "_ENV_PATH", tmp / ".env"),
+                patch.object(web_app, "_DEMO_ASSETS_DIR", fake_demo),
+            ):
+                client = TestClient(web_app.app)
+                client.get("/")
+                auth_headers = {"X-Solacut-Token": web_app._SESSION_TOKEN}
+
+                demo_resp = client.post("/api/onboarding/load-demo", headers=auth_headers)
+                self.assertEqual(demo_resp.status_code, 200)
+                self.assertTrue(demo_resp.json()["ok"])
+
+                dst_demo_mp4 = in_dir / "demo_highlight_30s.mp4"
+                dst_demo_wav = out_dir / "demo_highlight_30s_16k.wav"
+                self.assertGreater(dst_demo_mp4.stat().st_mtime, old_ts + 86400.0)
+                self.assertGreater(dst_demo_wav.stat().st_mtime, old_ts + 86400.0)
+                self.assertFalse(stale_overview.exists())
+                self.assertFalse(stale_review.exists())
+                self.assertTrue((out_dir / "demo_highlight_30s_chat_messages.db").is_file())
+                self.assertTrue((out_dir / "demo_highlight_30s_chat_radar.json").is_file())
+
+                # 若内置资产不含 _chat.json，应自动清理旧弹幕雷达文件
+                src_demo_chat.unlink()
+                demo_resp2 = client.post("/api/onboarding/load-demo", headers=auth_headers)
+                self.assertEqual(demo_resp2.status_code, 200)
+                self.assertFalse((out_dir / "demo_highlight_30s_chat_messages.db").exists())
+                self.assertFalse((out_dir / "demo_highlight_30s_chat_radar.json").exists())
+
+                # 3. 验证 /api/video-stream 200 与 206 均返回 Cache-Control: no-cache
+                s200 = client.get("/api/video-stream", params={"path": str(dst_demo_mp4)})
+                self.assertEqual(s200.status_code, 200)
+                self.assertEqual(s200.headers.get("cache-control"), "no-cache")
+
+                s206 = client.get(
+                    "/api/video-stream",
+                    params={"path": str(dst_demo_mp4)},
+                    headers={"Range": "bytes=0-7"},
+                )
+                self.assertEqual(s206.status_code, 206)
+                self.assertEqual(s206.headers.get("cache-control"), "no-cache")
+
+                # 4. 验证 _sync_stale_builtin_demo_if_needed：旧 demo-preset 自动升级，普通用户视频绝不覆盖
+                dst_demo_mp4.write_bytes(b"OLD_SMALL")
+                stale_overview.write_text('{"stale": 2}', encoding="utf-8")
+                videos_resp = client.get("/api/videos", headers=auth_headers)
+                self.assertEqual(videos_resp.status_code, 200)
+                self.assertEqual(dst_demo_mp4.read_bytes(), b"NEW_DEMO_VIDEO_BYTES_V2")
+                self.assertFalse(stale_overview.exists())
+
+                # 篡改为非 demo-preset 的用户自定义同名视频，即使大小不同也绝不覆写
+                user_hl = json.loads((out_dir / "demo_highlight_30s_highlights.json").read_text(encoding="utf-8"))
+                user_hl["model"] = "deepseek-chat"
+                (out_dir / "demo_highlight_30s_highlights.json").write_text(json.dumps(user_hl), encoding="utf-8")
+                dst_demo_mp4.write_bytes(b"USER_CUSTOM_VIDEO")
+                ob_resp = client.get("/api/onboarding/status", headers=auth_headers)
+                self.assertEqual(ob_resp.status_code, 200)
+                self.assertEqual(dst_demo_mp4.read_bytes(), b"USER_CUSTOM_VIDEO")
+
+            # 5. 验证 build_release.run_security_audit 拦截 .window_state.json
+            stage = tmp / "stage_audit"
+            stage.mkdir()
+            (stage / ".window_state.json").write_text("{}", encoding="utf-8")
+            sec_violations = build_release.run_security_audit(stage)
+            self.assertTrue(any(".window_state.json" in v for v in sec_violations))
+            self.assertGreater(time_mod.time(), 0)
+
+    def test_diagnose_reason_codes_and_desktop_window_state_persistence(self) -> None:
+        """验证音频诊断 reason_code / 去中二文案，以及桌面窗口几何状态校验与持久化。"""
+        import src.desktop_app as desktop_app
+        from src.step1_audio import diagnose_stream_energy
+
+        # 1. diagnose_stream_energy reason_code 全分支与去中二标题
+        d_short = diagnose_stream_energy([{"start_sec": 10.0, "peak_rms": 0.25}], 1200.0, 0.05)
+        self.assertEqual(d_short["grade"], "S")
+        self.assertEqual(d_short["grade_label"], "S · 高动态爆发场")
+        self.assertEqual(d_short["recommendation"]["reason_code"], "full_short")
+
+        d_flat_short = diagnose_stream_energy([{"start_sec": 100.0, "peak_rms": 0.09}], 3600.0, 0.05)
+        self.assertEqual(d_flat_short["grade"], "B")
+        self.assertEqual(d_flat_short["grade_label"], "B · 低动态或压限场")
+        self.assertEqual(d_flat_short["recommendation"]["reason_code"], "flat_full")
+
+        d_flat_long = diagnose_stream_energy([{"start_sec": 100.0, "peak_rms": 0.09}], 10800.0, 0.05)
+        self.assertEqual(d_flat_long["grade"], "B")
+        self.assertEqual(d_flat_long["recommendation"]["reason_code"], "flat_expand")
+
+        d_peaks = diagnose_stream_energy([{"start_sec": 100.0, "peak_rms": 0.25}], 5400.0, 0.05)
+        self.assertEqual(d_peaks["recommendation"]["reason_code"], "peaks_default")
+
+        # 2. desktop_app 初始几何尺寸与多屏状态持久化校验
+        w0, h0, max0 = desktop_app._compute_initial_window_geometry()
+        self.assertGreaterEqual(w0, 1120)
+        self.assertGreaterEqual(h0, 680)
+        self.assertIsInstance(max0, bool)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_file = Path(tmp_dir) / ".window_state.json"
+            with patch.object(desktop_app, "_get_screen_working_areas", return_value=[(0, 0, 1920, 1040)]):
+                state_file.write_text(
+                    json.dumps({"x": 100, "y": 80, "width": 1500, "height": 900, "maximized": True}),
+                    encoding="utf-8",
+                )
+                loaded = desktop_app._load_window_state(state_file)
+                self.assertIsNotNone(loaded)
+                assert loaded is not None
+                self.assertEqual((loaded["x"], loaded["y"], loaded["width"], loaded["height"], loaded["maximized"]), (100, 80, 1500, 900, True))
+
+                # 拔掉外接屏导致坐标完全落出工作区时，自动丢弃越界坐标而保留合理尺寸
+                state_file.write_text(
+                    json.dumps({"x": -2560, "y": 100, "width": 1280, "height": 720, "maximized": False}),
+                    encoding="utf-8",
+                )
+                loaded_oob = desktop_app._load_window_state(state_file)
+                self.assertIsNotNone(loaded_oob)
+                assert loaded_oob is not None
+                self.assertIsNone(loaded_oob["x"])
+                self.assertIsNone(loaded_oob["y"])
+                self.assertEqual((loaded_oob["width"], loaded_oob["height"]), (1280, 720))
+
+            # DesktopWindowBridge.save_window_state 保存到独立 state_path
+            from unittest.mock import MagicMock
+
+            bridge = desktop_app.DesktopWindowBridge(state_path=state_file)
+            fake_win = MagicMock()
+            fake_win.native = None
+            fake_win.x = 120
+            fake_win.y = 90
+            fake_win.width = 1600
+            fake_win.height = 920
+            bridge.bind_window(fake_win)
+            saved = bridge.save_window_state()
+            self.assertIsNotNone(saved)
+            disk_data = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(disk_data["width"], 1600)
+            self.assertEqual(disk_data["height"], 920)
+            self.assertFalse(disk_data["maximized"])
 
 
 if __name__ == "__main__":

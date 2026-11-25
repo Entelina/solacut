@@ -24,13 +24,13 @@ export const DOMAIN = 'solacut.com';
 export const SITE_URL = `https://${DOMAIN}`;
 
 /** 当前公开发布版本号 */
-export const VERSION = 'v0.9.3-beta';
+export const VERSION = 'v0.9.4-beta';
 
 /** 顶栏紧凑展示版本短标 */
-export const VERSION_SHORT = 'v0.9.3 Beta';
+export const VERSION_SHORT = 'v0.9.4 Beta';
 
 /** 当前版本发布日期（ISO 格式 YYYY-MM-DD） */
-export const RELEASE_DATE = '2026-11-24';
+export const RELEASE_DATE = '2026-11-25';
 
 /**
  * 是否已上传真实公测便携包直链并填入真实 SHA-256 哈希。
@@ -72,9 +72,9 @@ export const DOWNLOAD_LINKS = {
   /**
    * 正式发版包真实 64 位 SHA-256 哈希
    */
-  checksumSha256: 'fc89bfa61af601ffbe682dc1d73e9ded091ee7e0641e421fa308df9b3254f5ec',
+  checksumSha256: 'b3a2ade85e01cec2332fe1fab0279de455ce69169995a0c9246b28af0f5bfd0c',
   /** 便携包体积说明（内含静态 FFmpeg/FFprobe + WebView2 壳 + 228,210 条商用无限制语料索引） */
-  fileSize: '250.1 MB',
+  fileSize: '249.6 MB',
   /** 目标系统要求 */
   platform: 'Windows 10 / 11 (x64) · 免 Python / 解压即用',
 } as const;

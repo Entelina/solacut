@@ -1032,10 +1032,136 @@ def api_expand_corpus(req: CorpusExpandReq) -> dict[str, Any]:
     return _TASK_MANAGER.submit("corpus_expand", title, _worker)
 
 
+def _install_demo_project_to_workspace(in_dir: Path, out_dir: Path) -> tuple[Path, str]:
+    """将内置 30 秒免版权多语种示例工程完整写入指定工作区，并刷新时间戳与派生缓存。"""
+    demo_video = _DEMO_ASSETS_DIR / "demo_highlight_30s.mp4"
+    if not demo_video.is_file():
+        raise HTTPException(status_code=404, detail="内置示例视频缺失，请检查 assets/demo/ 目录")
+
+    in_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    dst_video = in_dir / demo_video.name
+    shutil.copy2(demo_video, dst_video)
+    os.utime(dst_video, None)
+    stem = dst_video.stem
+
+    # 同步拷贝预置的 16k WAV 与 JSON，并刷新修改时间与实时改写内部绝对路径
+    demo_wav = _DEMO_ASSETS_DIR / f"{stem}_16k.wav"
+    dst_wav = out_dir / f"{stem}_16k.wav"
+    if demo_wav.is_file():
+        shutil.copy2(demo_wav, dst_wav)
+        os.utime(dst_wav, None)
+
+    # 清理旧的波形概览缓存与审片 Markdown，迫使按新音轨重新生成高精波形轮廓
+    (out_dir / f"{stem}_waveform_overview.json").unlink(missing_ok=True)
+    (out_dir / f"{stem}_review.md").unlink(missing_ok=True)
+
+    for suffix in ("_audio_peaks.json", "_transcript.json", "_highlights.json"):
+        src_j = _DEMO_ASSETS_DIR / f"{stem}{suffix}"
+        if not src_j.is_file():
+            continue
+        payload = json.loads(src_j.read_text(encoding="utf-8"))
+        if "video_path" in payload:
+            payload["video_path"] = str(dst_video.resolve())
+        if "wav_path" in payload and dst_wav.is_file():
+            payload["wav_path"] = str(dst_wav.resolve())
+        if "peaks_json_path" in payload:
+            payload["peaks_json_path"] = str((out_dir / f"{stem}_audio_peaks.json").resolve())
+        if "transcript_json_path" in payload:
+            payload["transcript_json_path"] = str((out_dir / f"{stem}_transcript.json").resolve())
+        if "highlights_json_path" in payload:
+            payload["highlights_json_path"] = str((out_dir / f"{stem}_highlights.json").resolve())
+        if "review_md_path" in payload:
+            payload["review_md_path"] = str((out_dir / f"{stem}_review.md").resolve())
+        dst_j = out_dir / f"{stem}{suffix}"
+        atomic_write_json(dst_j, payload, indent=2)
+
+    # 同步预热内置弹幕文件 -> 本地 SQLite FTS5 库与轻量弹幕热力图 JSON，使体验工程开箱即带音弹双雷达
+    demo_chat = _DEMO_ASSETS_DIR / f"{stem}_chat.json"
+    db_path = out_dir / f"{stem}_chat_messages.db"
+    radar_path = out_dir / f"{stem}_chat_radar.json"
+    if demo_chat.is_file():
+        try:
+            parsed_chat = parse_chat_file(demo_chat)
+            peaks_file = out_dir / f"{stem}_audio_peaks.json"
+            demo_audio_peaks: list[dict[str, Any]] = []
+            demo_dur_hint: float | None = 30.0
+            if peaks_file.is_file():
+                pdata = json.loads(peaks_file.read_text(encoding="utf-8"))
+                if isinstance(pdata, dict):
+                    if isinstance(pdata.get("peak_segments"), list):
+                        demo_audio_peaks = pdata["peak_segments"]
+                    dval = float(pdata.get("total_duration_sec") or 0.0)
+                    if math.isfinite(dval) and dval > 0:
+                        demo_dur_hint = dval
+            spikes = analyze_chat_spikes(
+                parsed_chat["messages"],
+                duration_sec=demo_dur_hint,
+                bucket_sec=2.0,
+            )
+            fusion_peaks = (
+                fuse_audio_and_chat_peaks(demo_audio_peaks, spikes["chat_peaks"])
+                if demo_audio_peaks
+                else []
+            )
+            radar_payload: dict[str, Any] = {
+                "stem": stem,
+                "source_filename": demo_chat.name,
+                "format": parsed_chat["format"],
+                "message_count": parsed_chat["message_count"],
+                "duration_sec": spikes["duration_sec"],
+                "bucket_sec": spikes["bucket_sec"],
+                "total_hype_messages": spikes["total_hype_messages"],
+                "baseline_median": spikes["baseline_median"],
+                "baseline_mad": spikes["baseline_mad"],
+                "messages_db": db_path.name,
+                "buckets": spikes["buckets"],
+                "chat_peaks": spikes["chat_peaks"],
+                "fusion_peaks": fusion_peaks,
+            }
+            with _get_chat_stem_lock(out_dir, stem):
+                save_chat_messages_db(db_path, parsed_chat["messages"])
+                atomic_write_json(radar_path, radar_payload, indent=None)
+        except Exception as exc:
+            logger.warning("预热内置示例弹幕雷达失败（已静默降级）: %s", exc)
+    else:
+        with _get_chat_stem_lock(out_dir, stem):
+            radar_path.unlink(missing_ok=True)
+            db_path.unlink(missing_ok=True)
+
+    return dst_video, stem
+
+
+def _sync_stale_builtin_demo_if_needed(in_dir: Path, out_dir: Path) -> None:
+    """平滑升级工作区中的陈旧内置 30s Demo（仅当确认属于 demo-preset 预设且视频字节大小变更时才覆写）。"""
+    dst_video = in_dir / "demo_highlight_30s.mp4"
+    src_demo = _DEMO_ASSETS_DIR / "demo_highlight_30s.mp4"
+    dst_hl = out_dir / "demo_highlight_30s_highlights.json"
+    if not (dst_video.is_file() and src_demo.is_file() and dst_hl.is_file()):
+        return
+    try:
+        data = json.loads(dst_hl.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, dict) or data.get("model") != "demo-preset":
+        return
+    if dst_video.stat().st_size == src_demo.stat().st_size:
+        return
+    _install_demo_project_to_workspace(in_dir, out_dir)
+
+
 @app.get("/api/onboarding/status")
 def api_onboarding_status() -> dict[str, Any]:
     """检测首次启动就绪状态：是否已配 API Key、是否具备内置 30 秒示例工程及 FFmpeg 状态。"""
     cfg = _read_workbench_config()
+    try:
+        in_dir_str = str(cfg.get("input_dir") or "").strip()
+        out_dir_str = str(cfg.get("output_dir") or "").strip()
+        if in_dir_str and out_dir_str:
+            _sync_stale_builtin_demo_if_needed(Path(in_dir_str), Path(out_dir_str))
+    except Exception:
+        pass
     has_key = bool(
         cfg.get("has_api_key")
         or cfg.get("has_screen_api_key")
@@ -1061,94 +1187,10 @@ def api_onboarding_status() -> dict[str, Any]:
 @app.post("/api/onboarding/load-demo")
 def api_load_demo_project() -> dict[str, Any]:
     """将内置 30 秒免版权多语种体验工程导入工作区，零 API Key 即可体验完整审片/改词/导出流程。"""
-    demo_video = _DEMO_ASSETS_DIR / "demo_highlight_30s.mp4"
-    if not demo_video.is_file():
-        raise HTTPException(status_code=404, detail="内置示例视频缺失，请检查 assets/demo/ 目录")
-
     cfg = _read_workbench_config()
     in_dir = Path(cfg["input_dir"])
     out_dir = Path(cfg["output_dir"])
-    in_dir.mkdir(parents=True, exist_ok=True)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    dst_video = in_dir / demo_video.name
-    shutil.copy2(demo_video, dst_video)
-    stem = dst_video.stem
-
-    # 同步拷贝预置的 16k WAV 与 JSON，并把内部绝对路径实时改写为当前工作区路径
-    demo_wav = _DEMO_ASSETS_DIR / f"{stem}_16k.wav"
-    dst_wav = out_dir / f"{stem}_16k.wav"
-    if demo_wav.is_file():
-        shutil.copy2(demo_wav, dst_wav)
-
-    for suffix in ("_audio_peaks.json", "_transcript.json", "_highlights.json"):
-        src_j = _DEMO_ASSETS_DIR / f"{stem}{suffix}"
-        if not src_j.is_file():
-            continue
-        payload = json.loads(src_j.read_text(encoding="utf-8"))
-        if "video_path" in payload:
-            payload["video_path"] = str(dst_video.resolve())
-        if "wav_path" in payload and dst_wav.is_file():
-            payload["wav_path"] = str(dst_wav.resolve())
-        if "peaks_json_path" in payload:
-            payload["peaks_json_path"] = str((out_dir / f"{stem}_audio_peaks.json").resolve())
-        if "transcript_json_path" in payload:
-            payload["transcript_json_path"] = str((out_dir / f"{stem}_transcript.json").resolve())
-        if "highlights_json_path" in payload:
-            payload["highlights_json_path"] = str((out_dir / f"{stem}_highlights.json").resolve())
-        if "review_md_path" in payload:
-            payload["review_md_path"] = str((out_dir / f"{stem}_review.md").resolve())
-        dst_j = out_dir / f"{stem}{suffix}"
-        atomic_write_json(dst_j, payload, indent=2)
-
-    # 同步预热内置弹幕文件 -> 本地 SQLite FTS5 库与轻量弹幕热力图 JSON，使体验工程开箱即带音弹双雷达
-    demo_chat = _DEMO_ASSETS_DIR / f"{stem}_chat.json"
-    if demo_chat.is_file():
-        try:
-            parsed_chat = parse_chat_file(demo_chat)
-            peaks_file = out_dir / f"{stem}_audio_peaks.json"
-            demo_audio_peaks: list[dict[str, Any]] = []
-            demo_dur_hint: float | None = 30.0
-            if peaks_file.is_file():
-                pdata = json.loads(peaks_file.read_text(encoding="utf-8"))
-                if isinstance(pdata, dict):
-                    if isinstance(pdata.get("peak_segments"), list):
-                        demo_audio_peaks = pdata["peak_segments"]
-                    dval = float(pdata.get("total_duration_sec") or 0.0)
-                    if math.isfinite(dval) and dval > 0:
-                        demo_dur_hint = dval
-            spikes = analyze_chat_spikes(
-                parsed_chat["messages"],
-                duration_sec=demo_dur_hint,
-                bucket_sec=2.0,
-            )
-            fusion_peaks = (
-                fuse_audio_and_chat_peaks(demo_audio_peaks, spikes["chat_peaks"])
-                if demo_audio_peaks
-                else []
-            )
-            db_path = out_dir / f"{stem}_chat_messages.db"
-            radar_path = out_dir / f"{stem}_chat_radar.json"
-            radar_payload: dict[str, Any] = {
-                "stem": stem,
-                "source_filename": demo_chat.name,
-                "format": parsed_chat["format"],
-                "message_count": parsed_chat["message_count"],
-                "duration_sec": spikes["duration_sec"],
-                "bucket_sec": spikes["bucket_sec"],
-                "total_hype_messages": spikes["total_hype_messages"],
-                "baseline_median": spikes["baseline_median"],
-                "baseline_mad": spikes["baseline_mad"],
-                "messages_db": db_path.name,
-                "buckets": spikes["buckets"],
-                "chat_peaks": spikes["chat_peaks"],
-                "fusion_peaks": fusion_peaks,
-            }
-            with _get_chat_stem_lock(out_dir, stem):
-                save_chat_messages_db(db_path, parsed_chat["messages"])
-                atomic_write_json(radar_path, radar_payload, indent=None)
-        except Exception as exc:
-            logger.warning("预热内置示例弹幕雷达失败（已静默降级）: %s", exc)
+    dst_video, stem = _install_demo_project_to_workspace(in_dir, out_dir)
 
     return {
         "ok": True,
@@ -1368,6 +1410,10 @@ def list_videos(
     cfg = _read_workbench_config()
     in_dir = _resolve_allowed_input_dir(input_dir, cfg=cfg)
     out_dir = _resolve_allowed_output_dir(output_dir, cfg=cfg, create=False)
+    try:
+        _sync_stale_builtin_demo_if_needed(in_dir, out_dir)
+    except Exception:
+        pass
     items = scan_input_videos(in_dir, out_dir)
     return {
         "input_dir": str(in_dir),
@@ -1392,7 +1438,11 @@ def stream_video(request: Request, path: str = Query(...)) -> Any:
     range_header = request.headers.get("range")
 
     if not range_header:
-        return FileResponse(path=str(video_file), media_type=media_type)
+        return FileResponse(
+            path=str(video_file),
+            media_type=media_type,
+            headers={"Cache-Control": "no-cache"},
+        )
 
     # 解析形如 "bytes=1024-2047"、"bytes=1024-" 或后缀 "bytes=-1024"
     try:
@@ -1437,6 +1487,7 @@ def stream_video(request: Request, path: str = Query(...)) -> Any:
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Accept-Ranges": "bytes",
         "Content-Length": str(chunk_len),
+        "Cache-Control": "no-cache",
     }
     return StreamingResponse(
         _file_iterator(video_file, start, chunk_len),
@@ -2505,7 +2556,7 @@ def start_retranslate_task(req: RetranslateTaskReq) -> dict[str, Any]:
     title = f"重刷双语字幕（{rank_label}）：{stem}"
 
     def _worker(report_cb: Any) -> dict[str, Any]:
-        report_cb("step3", 20, f"[{stem}] 正在调用商业字幕精修引擎重新翻译{rank_label}...")
+        report_cb("step3", 20, f"[{stem}] 正在重新翻译所选片段字幕...")
         res = enrich_highlights_with_bilingual_subtitles(
             input_json_path=hl_path,
             hotwords=req.hotwords,

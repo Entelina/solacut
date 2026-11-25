@@ -142,7 +142,7 @@ export function createPresetTree(presetId) {
         ),
         makeSplit(
           "h",
-          0.62,
+          0.52,
           makeTabs(["timeline"], "timeline"),
           makeTabs(["clips", "subtitles", "transcript"], "clips")
         )

@@ -11,17 +11,44 @@
 
 import { formatTimecode } from "/static/nle_controls.js";
 
-const RULER_H = 22;
+const RULER_H = 26;
 const TRACK_HEIGHT_PRESETS = {
-  compact: { v1: 34, a1: 38, t1: 30 },
-  normal: { v1: 44, a1: 54, t1: 38 },
-  tall: { v1: 52, a1: 78, t1: 42 },
+  compact: { v1: 40, a1: 46, t1: 36 },
+  normal: { v1: 52, a1: 64, t1: 44 },
+  tall: { v1: 62, a1: 88, t1: 50 },
 };
+const UI_FONT_FAMILY =
+  '"Segoe UI", "Yu Gothic UI", "Malgun Gothic", "Microsoft YaHei UI", "PingFang SC", sans-serif';
+const MONO_FONT_FAMILY = '"Cascadia Mono", "Consolas", monospace';
 const TRIM_HANDLE_PX = 7;
 const SNAP_THRESHOLD_PX = 8;
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
+}
+
+function fitTextEllipsis(ctx, text, maxWidth) {
+  const str = String(text ?? "");
+  if (!str || maxWidth <= 0) return "";
+  if (ctx.measureText(str).width <= maxWidth) return str;
+  const ellipsis = "…";
+  const ellW = ctx.measureText(ellipsis).width;
+  if (ellW > maxWidth) return "";
+  const chars = Array.from(str);
+  let lo = 0;
+  let hi = chars.length - 1;
+  let best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const cand = chars.slice(0, mid).join("") + ellipsis;
+    if (ctx.measureText(cand).width <= maxWidth) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best > 0 ? chars.slice(0, best).join("") + ellipsis : ellipsis;
 }
 
 function chooseRulerStep(spanSec, widthPx) {
@@ -151,6 +178,7 @@ export class DualTimelineEngine {
     if (this.overviewCanvas) this._ro.observe(this.overviewCanvas);
     if (this.tracksCanvas) this._ro.observe(this.tracksCanvas);
 
+    this._syncHeaderHeights();
     this.requestDraw();
   }
 
@@ -455,6 +483,21 @@ export class DualTimelineEngine {
   }
 
   /* ==================== 坐标转换与轨道几何 ==================== */
+  _getCanvasMetrics(canvas, e = null) {
+    const r = canvas.getBoundingClientRect();
+    const w = Math.max(1, canvas.clientWidth || Math.round(r.width));
+    const h = Math.max(1, canvas.clientHeight || Math.round(r.height));
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const physW = Math.max(1, Math.round((r.width || w) * dpr));
+    const physH = Math.max(1, Math.round((r.height || h) * dpr));
+    const out = { r, w, h, dpr, physW, physH, scaleX: physW / w, scaleY: physH / h, x: 0, y: 0 };
+    if (e) {
+      out.x = (e.clientX - r.left) * (w / Math.max(1, r.width));
+      out.y = (e.clientY - r.top) * (h / Math.max(1, r.height));
+    }
+    return out;
+  }
+
   _getTrackLayout(h) {
     const preset = TRACK_HEIGHT_PRESETS[this.viewOptions.heightPreset] || TRACK_HEIGHT_PRESETS.normal;
     const topRuler = 0;
@@ -463,7 +506,7 @@ export class DualTimelineEngine {
     const topA1 = topV1 + hV1;
     const hA1 = this.tracksState.a1Visible ? preset.a1 : 0;
     const topT1 = topA1 + hA1;
-    const hT1 = this.tracksState.t1Visible ? Math.max(preset.t1, h - topT1) : 0;
+    const hT1 = this.tracksState.t1Visible ? preset.t1 : 0;
     return { topRuler, hRuler: RULER_H, topV1, hV1, topA1, hA1, topT1, hT1 };
   }
 
@@ -608,7 +651,7 @@ export class DualTimelineEngine {
     }
 
     // 命中 T1 双语字幕轨
-    if (lay.hT1 > 0 && y >= lay.topT1) {
+    if (lay.hT1 > 0 && y >= lay.topT1 && y < lay.topT1 + lay.hT1) {
       for (const item of this.highlights) {
         const subs = Array.isArray(item.subtitles) ? item.subtitles : [];
         for (let idx = 0; idx < subs.length; idx += 1) {
@@ -648,9 +691,7 @@ export class DualTimelineEngine {
     c.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
-      const r = c.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const w = Math.max(1, r.width);
+      const { x, w } = this._getCanvasMetrics(c, e);
       const vx1 = this._timeToOverviewX(this.viewStart, w);
       const vx2 = this._timeToOverviewX(this.viewEnd, w);
       const total = Math.max(10, this.duration || 120);
@@ -679,9 +720,7 @@ export class DualTimelineEngine {
     });
 
     c.addEventListener("pointermove", (e) => {
-      const r = c.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const w = Math.max(1, r.width);
+      const { x, w } = this._getCanvasMetrics(c, e);
       const total = Math.max(10, this.duration || 120);
       const minSpan = Math.min(total, 6);
 
@@ -753,27 +792,22 @@ export class DualTimelineEngine {
       "wheel",
       (e) => {
         e.preventDefault();
-        const r = c.getBoundingClientRect();
-        const x = e.clientX - r.left;
-        const anchorSec = this._trackXToTime(x, Math.max(1, r.width));
+        const { x, w } = this._getCanvasMetrics(c, e);
+        const anchorSec = this._trackXToTime(x, w);
         if (e.altKey || e.ctrlKey || e.metaKey) {
           const factor = e.deltaY > 0 ? 1.24 : 0.8;
           this.zoomByFactor(factor, anchorSec);
         } else {
           const span = this.viewEnd - this.viewStart;
           const delta = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY);
-          this.panBySeconds((delta / Math.max(300, r.width)) * span * 0.85);
+          this.panBySeconds((delta / Math.max(300, w)) * span * 0.85);
         }
       },
       { passive: false }
     );
 
     c.addEventListener("pointerdown", (e) => {
-      const r = c.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      const w = Math.max(1, r.width);
-      const h = Math.max(1, r.height);
+      const { x, y, w, h } = this._getCanvasMetrics(c, e);
 
       // 中键抓手平移
       if (e.button === 1) {
@@ -888,11 +922,7 @@ export class DualTimelineEngine {
     });
 
     c.addEventListener("pointermove", (e) => {
-      const r = c.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      const w = Math.max(1, r.width);
-      const h = Math.max(1, r.height);
+      const { x, y, w, h } = this._getCanvasMetrics(c, e);
 
       if (!this._trkDrag) {
         const prevZone = this._hoverInfo?.zone;
@@ -1001,8 +1031,8 @@ export class DualTimelineEngine {
     });
 
     c.addEventListener("dblclick", (e) => {
-      const r = c.getBoundingClientRect();
-      const hit = this._hitTestTracks(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+      const { x, y, w, h } = this._getCanvasMetrics(c, e);
+      const hit = this._hitTestTracks(x, y, w, h);
       if (hit.zone === "v1-clip") {
         this.onPreviewClip?.(hit.clip);
       } else if (hit.zone === "t1-sub") {
@@ -1013,8 +1043,8 @@ export class DualTimelineEngine {
     c.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const r = c.getBoundingClientRect();
-      const hit = this._hitTestTracks(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+      const { x, y, w, h } = this._getCanvasMetrics(c, e);
+      const hit = this._hitTestTracks(x, y, w, h);
       if (hit.zone === "chapter") {
         this.onChapterContextMenu?.(e, hit.chapter);
       } else if (hit.zone === "ruler") {
@@ -1044,24 +1074,21 @@ export class DualTimelineEngine {
     const canvas = this.overviewCanvas;
     const ctx = this.overviewCtx;
     if (!canvas || !ctx) return;
-    const r = canvas.getBoundingClientRect();
-    const w = Math.floor(r.width);
-    const h = Math.floor(r.height);
+    const { w, h, physW, physH, scaleX, scaleY } = this._getCanvasMetrics(canvas);
     if (w < 20 || h < 10) return;
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
+    if (canvas.width !== physW || canvas.height !== physH) {
+      canvas.width = physW;
+      canvas.height = physH;
     }
 
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#101012";
+    ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+    ctx.fillStyle = "#0e0f12";
     ctx.fillRect(0, 0, w, h);
 
-    // 1. 底层全片 Dead Air 死寂空白区灰显
+    // 1. 底层全片 Dead Air 死寂空白区
     if (this.deadAirSegments.length > 0) {
-      ctx.fillStyle = "rgba(130, 134, 144, 0.16)";
+      ctx.fillStyle = "#191a1f";
       for (const seg of this.deadAirSegments) {
         const dx1 = this._timeToOverviewX(Number(seg.start_sec) || 0, w);
         const dx2 = this._timeToOverviewX(Number(seg.end_sec) || 0, w);
@@ -1071,7 +1098,7 @@ export class DualTimelineEngine {
       }
     }
 
-    // 1b. 底层全片能量轮廓
+    // 1b. 底层全片单色实心音频能量轮廓
     const wf = this.overviewWave;
     if (wf && Array.isArray(wf.peak) && wf.peak.length > 0) {
       const peaks = wf.peak;
@@ -1084,44 +1111,37 @@ export class DualTimelineEngine {
         const val = peaks[idx] / maxVal;
         const barH = Math.max(1, val * (h - 6));
         const isHot = thr > 0 && (rms[idx] || 0) >= thr;
-        ctx.fillStyle = isHot ? "rgba(217, 155, 56, 0.55)" : "rgba(130, 140, 158, 0.28)";
-        ctx.fillRect(px, h - 2 - barH, 1.5, barH);
+        ctx.fillStyle = isHot ? "#695332" : "#2c2f38";
+        ctx.fillRect(px, h - 2 - barH, 1.3, barH);
       }
     }
 
-    // 1c. 弹幕热力图曲线叠加（紫青半透明面积 + 顶线 + 梗词命中高亮）
+    // 1c. 弹幕细钢蓝折线叠加（含梗词命中柱）
     const chatBuckets = this.chatRadar?.buckets;
     if (Array.isArray(chatBuckets) && chatBuckets.length > 0) {
       ctx.save();
       ctx.beginPath();
       let started = false;
-      let lastX = 0;
       for (const b of chatBuckets) {
         const midSec = ((Number(b.start_sec) || 0) + (Number(b.end_sec) || Number(b.start_sec) || 0)) * 0.5;
         const bx = this._timeToOverviewX(midSec, w);
         const norm = clamp(Number(b.norm) || 0, 0, 1);
         const by = h - 2 - norm * (h - 7);
         if (!started) {
-          ctx.moveTo(bx, h - 2);
-          ctx.lineTo(bx, by);
+          ctx.moveTo(bx, by);
           started = true;
         } else {
           ctx.lineTo(bx, by);
         }
-        lastX = bx;
       }
       if (started) {
-        ctx.lineTo(lastX, h - 2);
-        ctx.closePath();
-        ctx.fillStyle = "rgba(139, 92, 246, 0.28)";
-        ctx.fill();
-        ctx.strokeStyle = "rgba(34, 211, 238, 0.68)";
+        ctx.strokeStyle = "#6aa5d4";
         ctx.lineWidth = 1;
         ctx.stroke();
       }
       const searchCurve = this.chatRadar?.search?.curve;
       if (Array.isArray(searchCurve) && searchCurve.length > 0) {
-        ctx.fillStyle = "rgba(56, 189, 248, 0.72)";
+        ctx.fillStyle = "#7cb8e6";
         for (const sb of searchCurve) {
           if (!(Number(sb.hits) > 0)) continue;
           const sx1 = this._timeToOverviewX(Number(sb.start_sec) || 0, w);
@@ -1133,7 +1153,7 @@ export class DualTimelineEngine {
       ctx.restore();
     }
 
-    // 2. 全片高光切片色带
+    // 2. 全片高光切片顶部 4px 实心色条
     for (const item of this.highlights) {
       const x1 = this._timeToOverviewX(Number(item.start_sec) || 0, w);
       const x2 = this._timeToOverviewX(Number(item.end_sec) || 0, w);
@@ -1142,21 +1162,21 @@ export class DualTimelineEngine {
       const isReviewed = String(item.review_status || "draft").toLowerCase() === "reviewed";
       const isActive = this.activeClipRank !== null && Number(item.rank) === Number(this.activeClipRank);
       ctx.fillStyle = isActive
-        ? "rgba(217, 155, 56, 0.85)"
-        : isSelected
-          ? isReviewed
-            ? "rgba(55, 168, 85, 0.62)"
-            : "rgba(195, 146, 62, 0.45)"
-          : "rgba(110, 114, 126, 0.35)";
-      ctx.fillRect(x1, 3, bw, 6);
+        ? "#d8962e"
+        : !isSelected
+          ? "#454852"
+          : isReviewed
+            ? "#2fa15a"
+            : "#4b7ea8";
+      ctx.fillRect(x1, 0, bw, 4);
     }
 
     // 2b. OBS 章节翡翠绿微针
     if (this.chapters.length > 0) {
-      ctx.fillStyle = "#34d399";
+      ctx.fillStyle = "#38b27c";
       for (const ch of this.chapters) {
         const cx = Math.round(this._timeToOverviewX(Number(ch.start_sec) || 0, w));
-        ctx.fillRect(cx - 1, 0, 2, 4);
+        ctx.fillRect(cx - 1, 0, 2, 5);
       }
     }
 
@@ -1164,15 +1184,15 @@ export class DualTimelineEngine {
     const vx1 = this._timeToOverviewX(this.viewStart, w);
     const vx2 = this._timeToOverviewX(this.viewEnd, w);
     const vw = Math.max(10, vx2 - vx1);
-    ctx.fillStyle = "rgba(0, 0, 0, 0.48)";
+    ctx.fillStyle = "rgba(8, 8, 10, 0.55)";
     if (vx1 > 0) ctx.fillRect(0, 0, vx1, h);
     if (vx2 < w) ctx.fillRect(vx2, 0, w - vx2, h);
 
-    ctx.strokeStyle = "rgba(220, 224, 232, 0.72)";
+    ctx.strokeStyle = "#d4d7e0";
     ctx.lineWidth = 1;
     ctx.strokeRect(Math.round(vx1) + 0.5, 0.5, Math.max(8, Math.round(vw) - 1), h - 1);
     // 左右拖拽小竖柄
-    ctx.fillStyle = "#e4e6ec";
+    ctx.fillStyle = "#d4d7e0";
     ctx.fillRect(Math.round(vx1), 4, 2, h - 8);
     ctx.fillRect(Math.round(vx1 + vw) - 2, 4, 2, h - 8);
 
@@ -1227,8 +1247,9 @@ export class DualTimelineEngine {
       ctx.rect(0, topY, w, trackH);
       ctx.clip();
 
-      const usableH = Math.max(12, trackH - 8);
-      const baseY = topY + trackH - 2;
+      const topEdge = topY + 4;
+      const baseY = topY + trackH - 3;
+      const usableH = Math.max(10, baseY - topEdge);
       let started = false;
       let firstX = 0;
       let lastX = 0;
@@ -1252,21 +1273,21 @@ export class DualTimelineEngine {
       }
 
       if (started) {
-        ctx.strokeStyle = "rgba(34, 211, 238, 0.72)";
-        ctx.lineWidth = 1.25;
+        ctx.strokeStyle = "#6aa5d4";
+        ctx.lineWidth = 1.5;
         ctx.stroke();
 
         ctx.lineTo(lastX, baseY);
         ctx.lineTo(firstX, baseY);
         ctx.closePath();
-        ctx.fillStyle = "rgba(139, 92, 246, 0.20)";
+        ctx.fillStyle = "rgba(106, 165, 212, 0.08)";
         ctx.fill();
       }
 
-      // 梗词搜索命中曲线（亮青色柱）
+      // 梗词搜索命中曲线（钢蓝柱）
       const searchCurve = this.chatRadar.search?.curve;
       if (Array.isArray(searchCurve) && searchCurve.length > 0) {
-        ctx.fillStyle = "rgba(56, 189, 248, 0.45)";
+        ctx.fillStyle = "#7cb8e6";
         for (const sb of searchCurve) {
           if (!(Number(sb.hits) > 0)) continue;
           const ss = Number(sb.start_sec) || 0;
@@ -1279,7 +1300,7 @@ export class DualTimelineEngine {
         }
       }
 
-      // Top 弹幕爆点锚点（A1 顶部紫青/琥珀圆点）
+      // Top 弹幕爆点锚点（A1 顶部钢蓝锚点圆点）
       const chatPeaks = this.chatRadar.chat_peaks || [];
       for (const cp of chatPeaks) {
         const pSec = Number(cp.peak_sec ?? cp.start_sec) || 0;
@@ -1289,9 +1310,9 @@ export class DualTimelineEngine {
         const cy = topY + 8;
         ctx.beginPath();
         ctx.arc(px, cy, isHov ? 4.5 : 3.2, 0, Math.PI * 2);
-        ctx.fillStyle = isHov ? "#67e8f9" : "#a78bfa";
+        ctx.fillStyle = isHov ? "#b8dcf7" : "#7cb8e6";
         ctx.fill();
-        ctx.strokeStyle = "#0e1726";
+        ctx.strokeStyle = "#11161d";
         ctx.lineWidth = 1;
         ctx.stroke();
       }
@@ -1302,15 +1323,16 @@ export class DualTimelineEngine {
 
   _drawWaveformInTrack(ctx, w, topY, trackH) {
     const midY = topY + trackH / 2;
-    ctx.fillStyle = "#121215";
-    ctx.fillRect(0, topY, w, trackH);
+    const fullMode = Boolean(this.viewOptions.fullWaveform);
 
-    // Dead Air 死寂空白区暗灰斜纹标注
+    // Dead Air 死寂空白区暗灰斜纹标注（不铺实心轨道底，以免遮挡标尺网格线与 OBS 章节投射线）
     this._drawDeadAirOverlay(ctx, w, topY, trackH);
 
     // 中轴参考线
-    ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
-    ctx.fillRect(0, Math.round(midY), w, 1);
+    if (!fullMode) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+      ctx.fillRect(0, Math.round(midY), w, 1);
+    }
 
     // 优先使用命中当前视口的高精局部波形，否则用全片总览即时填充（零闪烁）
     let src = this.overviewWave;
@@ -1327,13 +1349,16 @@ export class DualTimelineEngine {
     if (!src || !Array.isArray(src.peak) || src.peak.length === 0) {
       this._drawChatRadarInTrack(ctx, w, topY, trackH);
       if (!this.chatRadar) {
-        ctx.fillStyle = "#4d4d56";
-        ctx.font = '10px "Segoe UI", sans-serif';
+        ctx.save();
+        ctx.fillStyle = "#7e828f";
+        ctx.font = `12px ${UI_FONT_FAMILY}`;
         ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
         const waitMsg = window.SolacutI18n
           ? window.SolacutI18n.t("tl.waitWave")
           : "Waiting for audio waveform";
-        ctx.fillText(waitMsg, w / 2, midY + 4);
+        ctx.fillText(waitMsg, Math.round(w / 2), Math.round(midY));
+        ctx.restore();
       }
       return;
     }
@@ -1347,14 +1372,41 @@ export class DualTimelineEngine {
 
     // 计算稳健归一化基准，防止单次爆麦压扁整轨
     const globalRef = Math.max(0.18, Number(src.rms_threshold || 0) * 2.2, 0.28);
-    const fullMode = Boolean(this.viewOptions.fullWaveform);
     const halfH = fullMode ? trackH - 4 : trackH * 0.45;
     const baseBottom = topY + trackH - 2;
     const muted = this.audioMuted;
+    const thr = Number(src.rms_threshold || 0);
 
-    for (let px = 0; px < w; px += 1) {
+    // Step 1 高能阈值参考虚线（对称模式画上下双边，全高模式画单条）
+    if (thr > 0) {
+      const thrOffset = Math.min(halfH - 2, (thr / globalRef) * halfH);
+      ctx.save();
+      ctx.strokeStyle = "#473c28";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      if (fullMode) {
+        const thrY = Math.round(baseBottom - thrOffset) + 0.5;
+        ctx.moveTo(0, thrY);
+        ctx.lineTo(w, thrY);
+      } else {
+        const thrYTop = Math.round(midY - thrOffset) + 0.5;
+        const thrYBot = Math.round(midY + thrOffset) + 0.5;
+        ctx.moveTo(0, thrYTop);
+        ctx.lineTo(w, thrYTop);
+        ctx.moveTo(0, thrYBot);
+        ctx.lineTo(w, thrYBot);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 离散实心柱步进（单色相双明度 Peak 外包络 + 完全不透明 RMS 内核）
+    const stepPx = 2;
+    const barW = 1.3;
+    for (let px = 0; px < w; px += stepPx) {
       const t0 = this._trackXToTime(px, w);
-      const t1 = this._trackXToTime(px + 1, w);
+      const t1 = this._trackXToTime(px + stepPx, w);
       if (t1 < srcStart || t0 > srcEnd) continue;
 
       const i0 = clamp(Math.floor(((t0 - srcStart) / srcSpan) * len), 0, len - 1);
@@ -1370,39 +1422,19 @@ export class DualTimelineEngine {
       const rmH = Math.min(halfH, (rm / globalRef) * halfH);
 
       if (pkH > 0.5) {
-        ctx.fillStyle = muted ? "rgba(110, 112, 120, 0.25)" : "rgba(72, 134, 108, 0.36)";
-        if (fullMode) ctx.fillRect(px, baseBottom - pkH, 1, pkH);
-        else ctx.fillRect(px, midY - pkH, 1, pkH * 2);
+        ctx.fillStyle = muted ? "#23252b" : "#1c3936";
+        if (fullMode) ctx.fillRect(px, baseBottom - pkH, barW, pkH);
+        else ctx.fillRect(px, midY - pkH, barW, pkH * 2);
       }
       if (rmH > 0.5) {
-        const hot = Number(src.rms_threshold || 0) > 0 && rm >= Number(src.rms_threshold);
-        ctx.fillStyle = muted
-          ? "rgba(128, 130, 138, 0.4)"
-          : hot
-            ? "rgba(217, 155, 56, 0.78)"
-            : "rgba(88, 178, 122, 0.72)";
-        if (fullMode) ctx.fillRect(px, baseBottom - rmH, 1, rmH);
-        else ctx.fillRect(px, midY - rmH, 1, rmH * 2);
+        const hot = thr > 0 && rm >= thr;
+        ctx.fillStyle = muted ? "#3e414a" : hot ? "#d8962e" : "#359c8e";
+        if (fullMode) ctx.fillRect(px, baseBottom - rmH, barW, rmH);
+        else ctx.fillRect(px, midY - rmH, barW, rmH * 2);
       }
     }
 
-    // Step 1 音频能量阈值虚线
-    const thr = Number(src.rms_threshold || 0);
-    if (thr > 0) {
-      const thrOffset = Math.min(halfH - 2, (thr / globalRef) * halfH);
-      const thrY = fullMode ? Math.round(baseBottom - thrOffset) + 0.5 : Math.round(midY - thrOffset) + 0.5;
-      ctx.save();
-      ctx.strokeStyle = "rgba(217, 155, 56, 0.45)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(0, thrY);
-      ctx.lineTo(w, thrY);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // 叠加弹幕热力图曲线与 Top 爆点锚点
+    // 叠加弹幕折线与 Top 爆点锚点
     this._drawChatRadarInTrack(ctx, w, topY, trackH);
   }
 
@@ -1410,36 +1442,62 @@ export class DualTimelineEngine {
     const canvas = this.tracksCanvas;
     const ctx = this.tracksCtx;
     if (!canvas || !ctx) return;
-    const r = canvas.getBoundingClientRect();
-    const w = Math.floor(r.width);
-    const h = Math.floor(r.height);
+    const { w, h, physW, physH, scaleX, scaleY } = this._getCanvasMetrics(canvas);
     if (w < 20 || h < 20) return;
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
+    if (canvas.width !== physW || canvas.height !== physH) {
+      canvas.width = physW;
+      canvas.height = physH;
     }
 
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#141417";
+    ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+    ctx.fillStyle = "#131417";
     ctx.fillRect(0, 0, w, h);
 
     const lay = this._getTrackLayout(h);
     const span = Math.max(0.1, this.viewEnd - this.viewStart);
 
-    /* ---------- 1. Timecode Ruler ---------- */
+    /* ---------- 1. 标尺底条与三条轨道底色 + 黑分界线（先铺底，防止网格线与章节投射线被遮挡） ---------- */
     ctx.fillStyle = "#1b1b1f";
     ctx.fillRect(0, 0, w, lay.hRuler);
     ctx.fillStyle = "#09090a";
     ctx.fillRect(0, lay.hRuler - 1, w, 1);
 
+    if (lay.hV1 > 0) {
+      ctx.fillStyle = "#141518";
+      ctx.fillRect(0, lay.topV1, w, lay.hV1);
+      ctx.fillStyle = "#09090a";
+      ctx.fillRect(0, lay.topV1 + lay.hV1 - 1, w, 1);
+    }
+
+    if (lay.hA1 > 0) {
+      ctx.fillStyle = "#0e0f12";
+      ctx.fillRect(0, lay.topA1, w, lay.hA1);
+      ctx.fillStyle = "#09090a";
+      ctx.fillRect(0, lay.topA1 + lay.hA1 - 1, w, 1);
+    }
+
+    if (lay.hT1 > 0) {
+      ctx.fillStyle = "#131417";
+      ctx.fillRect(0, lay.topT1, w, lay.hT1);
+      ctx.fillStyle = "#09090a";
+      ctx.fillRect(0, lay.topT1 + lay.hT1 - 1, w, 1);
+    }
+
+    const tracksBottom = lay.topT1 + lay.hT1;
+    if (tracksBottom < h) {
+      ctx.fillStyle = "#101114";
+      ctx.fillRect(0, tracksBottom, w, h - tracksBottom);
+    }
+
+    /* ---------- 2. Timecode Ruler 刻度与全轨纵向参考竖线 ---------- */
     const majorStep = chooseRulerStep(span, w);
     const minorStep = majorStep / 5;
     const firstMinor = Math.floor(this.viewStart / minorStep) * minorStep;
 
-    ctx.font = '10px "Cascadia Mono", Consolas, monospace';
+    ctx.font = `11.5px ${MONO_FONT_FAMILY}`;
     ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
     for (let t = firstMinor; t <= this.viewEnd + minorStep; t += minorStep) {
       if (t < 0) continue;
       const tx = Math.round(this._timeToTrackX(t, w));
@@ -1447,19 +1505,19 @@ export class DualTimelineEngine {
       const isMajor = Math.abs(t / majorStep - Math.round(t / majorStep)) < 0.01;
       if (isMajor) {
         ctx.fillStyle = "#484852";
-        ctx.fillRect(tx, 10, 1, lay.hRuler - 11);
+        ctx.fillRect(tx, 12, 1, lay.hRuler - 13);
         ctx.fillStyle = "#8a8a96";
-        ctx.fillText(formatRulerClock(t), tx + 4, 12);
-        // 极淡纵向参考网格线
-        ctx.fillStyle = "rgba(255, 255, 255, 0.025)";
+        ctx.fillText(formatRulerClock(t), tx + 4, 14);
+        // 极淡纵向参考网格线（穿透 V1/A1/T1 底色）
+        ctx.fillStyle = "#1c1d22";
         ctx.fillRect(tx, lay.hRuler, 1, h - lay.hRuler);
       } else {
         ctx.fillStyle = "#2d2d34";
-        ctx.fillRect(tx, 16, 1, lay.hRuler - 17);
+        ctx.fillRect(tx, 18, 1, lay.hRuler - 19);
       }
     }
 
-    /* ---------- 1b. OBS 章节翡翠绿菱形标记 ---------- */
+    /* ---------- 2b. OBS 章节投射虚线与标尺底部菱形标记 ---------- */
     if (this.chapters.length > 0) {
       for (const ch of this.chapters) {
         const cs = Number(ch.start_sec) || 0;
@@ -1467,9 +1525,9 @@ export class DualTimelineEngine {
         const cx = Math.round(this._timeToTrackX(cs, w)) + 0.5;
         const isHov = this._hoverInfo?.zone === "chapter" && this._hoverInfo.chapter === ch;
 
-        // 向下投射极淡翡翠绿参考线
+        // 向下投射参考虚线
         ctx.save();
-        ctx.strokeStyle = isHov ? "rgba(52, 211, 153, 0.52)" : "rgba(52, 211, 153, 0.16)";
+        ctx.strokeStyle = isHov ? "rgba(102, 209, 160, 0.55)" : "rgba(62, 168, 120, 0.24)";
         ctx.lineWidth = 1;
         ctx.setLineDash([2, 3]);
         ctx.beginPath();
@@ -1487,21 +1545,16 @@ export class DualTimelineEngine {
         ctx.lineTo(cx, cy + rad);
         ctx.lineTo(cx - rad, cy);
         ctx.closePath();
-        ctx.fillStyle = isHov ? "#6ee7b7" : "#34d399";
+        ctx.fillStyle = isHov ? "#66d1a0" : "#38b27c";
         ctx.fill();
-        ctx.strokeStyle = "#052e22";
+        ctx.strokeStyle = "#0b2419";
         ctx.lineWidth = 1;
         ctx.stroke();
       }
     }
 
-    /* ---------- 2. V1 高光切片轨 ---------- */
+    /* ---------- 3. V1 高光切片轨（100% 实心哑光硬件质感） ---------- */
     if (lay.hV1 > 0) {
-      ctx.fillStyle = "#16161a";
-      ctx.fillRect(0, lay.topV1, w, lay.hV1);
-      ctx.fillStyle = "#09090a";
-      ctx.fillRect(0, lay.topV1 + lay.hV1 - 1, w, 1);
-
       for (const item of this.highlights) {
         const s = Number(item.start_sec) || 0;
         const e = Number(item.end_sec) || s + 1;
@@ -1509,44 +1562,51 @@ export class DualTimelineEngine {
 
         const x1 = this._timeToTrackX(s, w);
         const x2 = this._timeToTrackX(e, w);
-        const drawX = Math.max(0, x1);
-        const drawW = Math.max(3, Math.min(w, x2) - drawX);
+        const drawX = Math.round(Math.max(0, x1));
+        const drawW = Math.max(3, Math.round(Math.min(w, x2)) - drawX);
         const y = lay.topV1 + 5;
-        const bh = lay.hV1 - 11;
+        const bh = Math.max(16, lay.hV1 - 11);
 
         const isSelected = item.selected !== false;
         const isReviewed = String(item.review_status || "draft").toLowerCase() === "reviewed";
         const isActive = this.activeClipRank !== null && Number(item.rank) === Number(this.activeClipRank);
         const isHovered = this._hoverInfo?.zone === "v1-clip" && this._hoverInfo.clip === item;
 
-        // 达芬奇风格低饱和工业色块（零塑料霓虹）
-        ctx.fillStyle = isActive
-          ? "rgba(217, 155, 56, 0.28)"
-          : isSelected
-            ? isReviewed
-              ? "rgba(55, 168, 85, 0.22)"
-              : "rgba(88, 122, 158, 0.30)"
-            : "rgba(68, 68, 76, 0.26)";
+        // 实心块底
+        if (isActive) {
+          ctx.fillStyle = isReviewed ? "#22362c" : "#2b313c";
+        } else if (!isSelected) {
+          ctx.fillStyle = "#1d1e23";
+        } else if (isReviewed) {
+          ctx.fillStyle = "#1a2b23";
+        } else {
+          ctx.fillStyle = "#202934";
+        }
         ctx.fillRect(drawX, y, drawW, bh);
 
-        // 顶部色带细条（已人工校对呈翡翠绿）
-        ctx.fillStyle = isReviewed
-          ? "#37a855"
-          : isActive
-            ? "#d99b38"
-            : isSelected
-              ? "#6e92b8"
-              : "#52525c";
-        ctx.fillRect(drawX, y, drawW, 2.5);
+        // 顶部语义色冠 + 内嵌/激活外框（互不压线冲淡）
+        if (isActive) {
+          const capColor = isReviewed ? "#38b866" : "#df9d36";
+          ctx.fillStyle = capColor;
+          ctx.fillRect(drawX + 1.5, y + 1.5, Math.max(1, drawW - 3), 3);
 
-        // 描边
-        ctx.strokeStyle = isActive
-          ? "#e6b050"
-          : isHovered
-            ? "rgba(220, 224, 232, 0.55)"
-            : "rgba(255, 255, 255, 0.14)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(drawX + 0.5, y + 0.5, Math.max(2, drawW - 1), bh - 1);
+          ctx.strokeStyle = "#eef0f5";
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(drawX + 0.75, y + 0.75, Math.max(2, drawW - 1.5), bh - 1.5);
+        } else {
+          const borderColor = !isSelected
+            ? (isHovered ? "#4f5361" : "#2d2f38")
+            : isReviewed
+              ? (isHovered ? "#3e6e56" : "#284738")
+              : (isHovered ? "#4a627d" : "#314152");
+          ctx.strokeStyle = borderColor;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(drawX + 0.5, y + 0.5, Math.max(2, drawW - 1), bh - 1);
+
+          const capH = isSelected ? 3 : 2.5;
+          ctx.fillStyle = !isSelected ? "#40434d" : isReviewed ? "#2fa15a" : "#4b7ea8";
+          ctx.fillRect(drawX, y, drawW, capH);
+        }
 
         // 悬停在左右 Trim 热区时高亮微把手
         if (isHovered && !this.tracksState.v1Locked && this.tool === "select") {
@@ -1559,70 +1619,81 @@ export class DualTimelineEngine {
           }
         }
 
-        // 块内信息标签（空间足够且开启名称显示时裁剪绘制）
+        // 块内信息标签（空间足够且开启名称显示时采用二分省略号截断绘制）
         if (this.viewOptions.showClipNames && drawW >= 34) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(drawX + 4, y + 2, drawW - 8, bh - 4);
-          ctx.clip();
-          ctx.font = '600 11px "Segoe UI", "Microsoft YaHei UI", sans-serif';
-          ctx.fillStyle = isSelected ? "#e8e8ec" : "#8b8b96";
-          const labelPrefix = isReviewed ? "✓ " : "";
-          const label = `${labelPrefix}#${item.rank} ${item.title_tgt || item.title_zh || item.title_src || item.title_en || ""}`;
-          ctx.fillText(label, drawX + 5, y + 16);
+          const textPadX = 6;
+          const maxTextW = drawW - textPadX * 2;
+          if (maxTextW >= 12) {
+            const textX = Math.round(drawX + textPadX);
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(drawX + 2, y + 2, drawW - 4, bh - 4);
+            ctx.clip();
 
-          if (drawW >= 95) {
-            ctx.font = '10px "Cascadia Mono", Consolas, monospace';
-            ctx.fillStyle = "#9696a2";
-            const dur = Math.max(0, e - s).toFixed(1);
-            const hasScore =
-              item.score !== null &&
-              item.score !== undefined &&
-              item.score !== "" &&
-              Number.isFinite(Number(item.score));
-            let metaText = "";
-            if (hasScore) {
-              const scoreStr = Number(item.score).toFixed(1);
-              metaText = window.SolacutI18n
-                ? window.SolacutI18n.t("tl.scoreDur", { score: scoreStr, dur })
-                : `${scoreStr} pts · ${dur}s`;
+            ctx.font = `600 12.5px ${UI_FONT_FAMILY}`;
+            ctx.fillStyle = isActive ? "#f4f6fa" : isSelected ? "#eaedf2" : "#858994";
+            ctx.textAlign = "left";
+            const labelPrefix = isReviewed ? "✓ " : "";
+            const rawLabel = `${labelPrefix}#${item.rank} ${item.title_tgt || item.title_zh || item.title_src || item.title_en || ""}`;
+            const label = fitTextEllipsis(ctx, rawLabel, maxTextW);
+
+            if (bh < 40) {
+              ctx.textBaseline = "middle";
+              ctx.fillText(label, textX, Math.round(y + bh / 2));
             } else {
-              const srcRaw = String(item.source || "").trim().toLowerCase();
-              const srcTag =
-                srcRaw === "obs_chapter"
-                  ? "OBS"
-                  : srcRaw === "chat_peak"
-                    ? "CHAT"
-                    : srcRaw === "transcript"
-                      ? "TR"
-                      : srcRaw === "manual"
-                        ? "MAN"
-                        : "—";
-              metaText = window.SolacutI18n
-                ? window.SolacutI18n.t("tl.srcDur", { src: srcTag, dur })
-                : `${srcTag} · ${dur}s`;
+              ctx.textBaseline = "alphabetic";
+              ctx.fillText(label, textX, Math.round(y + 18));
+
+              if (drawW >= 95) {
+                ctx.font = `11.5px ${MONO_FONT_FAMILY}`;
+                ctx.fillStyle = isActive || isSelected ? "#9ca2b0" : "#6c707b";
+                const dur = Math.max(0, e - s).toFixed(1);
+                const hasScore =
+                  item.score !== null &&
+                  item.score !== undefined &&
+                  item.score !== "" &&
+                  Number.isFinite(Number(item.score));
+                let metaText = "";
+                if (hasScore) {
+                  const scoreStr = Number(item.score).toFixed(1);
+                  metaText = window.SolacutI18n
+                    ? window.SolacutI18n.t("tl.scoreDur", { score: scoreStr, dur })
+                    : `${scoreStr} pts · ${dur}s`;
+                } else {
+                  const srcRaw = String(item.source || "").trim().toLowerCase();
+                  const srcTag =
+                    srcRaw === "obs_chapter"
+                      ? "OBS"
+                      : srcRaw === "chat_peak"
+                        ? "CHAT"
+                        : srcRaw === "transcript"
+                          ? "TR"
+                          : srcRaw === "manual"
+                            ? "MAN"
+                            : "—";
+                  metaText = window.SolacutI18n
+                    ? window.SolacutI18n.t("tl.srcDur", { src: srcTag, dur })
+                    : `${srcTag} · ${dur}s`;
+                }
+                const fittedMeta = fitTextEllipsis(ctx, metaText, maxTextW);
+                ctx.fillText(fittedMeta, textX, Math.round(y + 34));
+              }
             }
-            ctx.fillText(metaText, drawX + 5, y + 28);
+            ctx.restore();
           }
-          ctx.restore();
         }
       }
     }
 
-    /* ---------- 3. A1 音频波形轨 ---------- */
+    /* ---------- 4. A1 音频波形与弹幕轨 ---------- */
     if (lay.hA1 > 0) {
       this._drawWaveformInTrack(ctx, w, lay.topA1, lay.hA1);
-      ctx.fillStyle = "#09090a";
-      ctx.fillRect(0, lay.topA1 + lay.hA1 - 1, w, 1);
     }
 
-    /* ---------- 4. T1 双语字幕轨 ---------- */
+    /* ---------- 5. T1 双语字幕轨（实心炭钢卡片 + 1.5px 黑缝防粘连 + 垂直居中） ---------- */
     if (lay.hT1 > 0) {
-      ctx.fillStyle = "#151518";
-      ctx.fillRect(0, lay.topT1, w, lay.hT1);
-
       const subY = lay.topT1 + 5;
-      const subH = Math.min(26, lay.hT1 - 10);
+      const subH = Math.max(22, lay.hT1 - 10);
 
       for (const item of this.highlights) {
         const subs = Array.isArray(item.subtitles) ? item.subtitles : [];
@@ -1635,39 +1706,53 @@ export class DualTimelineEngine {
           const x1 = this._timeToTrackX(st, w);
           const x2 = this._timeToTrackX(ed, w);
           const drawX = Math.max(0, x1);
-          const drawW = Math.max(2, Math.min(w, x2) - drawX);
+          const drawW = Math.max(2, Math.min(w, x2) - drawX - 1.5);
           const key = `${item.rank}:${idx}`;
           const isCur = key === this.activeSubKey;
           const isHov = this._hoverInfo?.zone === "t1-sub" && this._hoverInfo.sub === s;
 
-          ctx.fillStyle = isCur
-            ? "rgba(217, 155, 56, 0.32)"
-            : isHov
-              ? "rgba(150, 162, 182, 0.28)"
-              : "rgba(122, 132, 148, 0.18)";
+          ctx.fillStyle = isCur ? "#2e333f" : isHov ? "#2a2e38" : "#22252d";
           ctx.fillRect(drawX, subY, drawW, subH);
 
-          ctx.strokeStyle = isCur
-            ? "#d99b38"
-            : "rgba(176, 188, 206, 0.28)";
+          ctx.strokeStyle = isCur ? "#d8962e" : isHov ? "#525868" : "#353945";
           ctx.lineWidth = 1;
-          ctx.strokeRect(drawX + 0.5, subY + 0.5, Math.max(1.5, drawW - 1), subH - 1);
+          ctx.strokeRect(
+            Math.round(drawX) + 0.5,
+            subY + 0.5,
+            Math.max(1.5, Math.round(drawW) - 1),
+            subH - 1
+          );
 
-          if (drawW >= 32) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(drawX + 3, subY + 1, drawW - 6, subH - 2);
-            ctx.clip();
-            ctx.font = '10.5px "Segoe UI", "Microsoft YaHei UI", sans-serif';
-            ctx.fillStyle = isCur ? "#f5f5f7" : "#c6c8d0";
-            ctx.fillText((s.text_tgt || s.text_zh || s.text_src || s.text_en || "").trim(), drawX + 4, subY + 16);
-            ctx.restore();
+          if (isCur) {
+            ctx.fillStyle = "#d8962e";
+            ctx.fillRect(drawX, subY, Math.min(3, drawW), subH);
+          }
+
+          if (drawW >= 24) {
+            const textPadX = 6;
+            const maxTextW = drawW - textPadX * 2;
+            if (maxTextW >= 12) {
+              const rawSub = (s.text_tgt || s.text_zh || s.text_src || s.text_en || "").trim();
+              if (rawSub) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(drawX + 2, subY + 1, drawW - 4, subH - 2);
+                ctx.clip();
+                ctx.font = `12.5px ${UI_FONT_FAMILY}`;
+                ctx.fillStyle = isCur ? "#ffffff" : "#e0e3eb";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
+                const fittedSub = fitTextEllipsis(ctx, rawSub, maxTextW);
+                ctx.fillText(fittedSub, Math.round(drawX + textPadX), Math.round(subY + subH / 2));
+                ctx.restore();
+              }
+            }
           }
         }
       }
     }
 
-    /* ---------- 5. 磁吸金色辅助竖线 ---------- */
+    /* ---------- 6. 磁吸金色辅助竖线 ---------- */
     if (this._snapGuideSec !== null) {
       const sx = Math.round(this._timeToTrackX(this._snapGuideSec, w)) + 0.5;
       ctx.save();
@@ -1681,7 +1766,7 @@ export class DualTimelineEngine {
       ctx.restore();
     }
 
-    /* ---------- 6. 剃刀悬停虚线刀标 ---------- */
+    /* ---------- 7. 剃刀悬停虚线刀标 ---------- */
     if (this.tool === "razor" && this._hoverInfo?.zone === "t1-sub") {
       const rx = Math.round(this._timeToTrackX(this._hoverInfo.sec, w)) + 0.5;
       ctx.save();
@@ -1695,7 +1780,7 @@ export class DualTimelineEngine {
       ctx.restore();
     }
 
-    /* ---------- 7. 全轨达芬奇信号红播放头 ---------- */
+    /* ---------- 8. 全轨达芬奇信号红播放头 ---------- */
     const playX = this._timeToTrackX(this.currentTime, w);
     if (playX >= -6 && playX <= w + 6) {
       const cx = Math.round(playX) + 0.5;
@@ -1711,7 +1796,7 @@ export class DualTimelineEngine {
       ctx.fillRect(Math.round(playX) - 0.5, 11, 1.5, h - 11);
     }
 
-    /* ---------- 8. 拖拽 Trim 浮动实时时码提示 ---------- */
+    /* ---------- 9. 拖拽 Trim 浮动实时时码提示 ---------- */
     if (this._trkDrag && (this._trkDrag.mode === "trim-clip" || this._trkDrag.mode === "trim-sub")) {
       const d = this._trkDrag;
       const tSec =
@@ -1722,56 +1807,68 @@ export class DualTimelineEngine {
           : d.edge === "left"
             ? Number(d.sub.start_sec)
             : Number(d.sub.end_sec);
-      const tx = clamp(this._timeToTrackX(tSec, w), 38, w - 58);
+      const boxW = 82;
+      const boxH = 21;
+      const tx = Math.round(
+        clamp(this._timeToTrackX(tSec, w), boxW / 2 + 4, Math.max(boxW / 2 + 4, w - boxW / 2 - 4))
+      );
+      const bx = Math.round(tx - boxW / 2);
+      const by = lay.hRuler + 3;
       const label = formatTimecode(tSec, true);
-      ctx.fillStyle = "rgba(18, 18, 20, 0.92)";
-      ctx.fillRect(tx - 34, lay.hRuler + 3, 68, 17);
+      ctx.save();
+      ctx.fillStyle = "#141519";
+      ctx.fillRect(bx, by, boxW, boxH);
       ctx.strokeStyle = "#d99b38";
       ctx.lineWidth = 1;
-      ctx.strokeRect(tx - 34 + 0.5, lay.hRuler + 3.5, 67, 16);
+      ctx.strokeRect(bx + 0.5, by + 0.5, boxW - 1, boxH - 1);
       ctx.fillStyle = "#f0ba59";
-      ctx.font = '600 10px "Cascadia Mono", Consolas, monospace';
+      ctx.font = `600 12px ${MONO_FONT_FAMILY}`;
       ctx.textAlign = "center";
-      ctx.fillText(label, tx, lay.hRuler + 14.5);
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, tx, Math.round(by + boxH / 2));
+      ctx.restore();
     }
 
-    /* ---------- 9. 悬停 OBS 章节 / 弹幕爆点 暗房浮动 Tooltip ---------- */
+    /* ---------- 10. 悬停 OBS 章节 / 弹幕爆点 暗房浮动 Tooltip ---------- */
     if (!this._trkDrag && (this._hoverInfo?.zone === "chapter" || this._hoverInfo?.zone === "chat-peak")) {
       let tipText = "";
       let anchorSec = 0;
-      let accentColor = "#34d399";
+      let accentColor = "#38b27c";
       let tipY = lay.hRuler + 4;
       if (this._hoverInfo.zone === "chapter") {
         const ch = this._hoverInfo.chapter;
         anchorSec = Number(ch.start_sec) || 0;
         tipText = `◆ ${ch.title || `Chapter ${ch.index}`} · ${formatRulerClock(anchorSec)}`;
-        accentColor = "#34d399";
+        accentColor = "#38b27c";
         tipY = lay.hRuler + 4;
       } else if (this._hoverInfo.zone === "chat-peak") {
         const cp = this._hoverInfo.peak;
         anchorSec = Number(cp.peak_sec ?? cp.start_sec) || 0;
         const terms = Array.isArray(cp.top_terms) && cp.top_terms.length ? ` · ${cp.top_terms.slice(0, 3).join(", ")}` : "";
         tipText = `⚡ ${cp.msg_count || 0} msg (z=${Number(cp.z_score || 0).toFixed(1)})${terms} · ${formatRulerClock(anchorSec)}`;
-        accentColor = "#22d3ee";
+        accentColor = "#7cb8e6";
         tipY = lay.topA1 + 16;
       }
       if (tipText) {
         ctx.save();
-        ctx.font = '500 10.5px "Segoe UI", "Microsoft YaHei UI", sans-serif';
+        ctx.font = `500 12px ${UI_FONT_FAMILY}`;
+        const padX = 10;
         const metrics = ctx.measureText(tipText);
-        const boxW = Math.min(w - 12, Math.ceil(metrics.width) + 14);
-        const boxH = 19;
+        const boxW = Math.min(w - 12, Math.ceil(metrics.width) + padX * 2);
+        const boxH = 24;
         const rawX = this._timeToTrackX(anchorSec, w) - boxW / 2;
-        const bx = clamp(rawX, 6, Math.max(6, w - boxW - 6));
-        const by = clamp(tipY, lay.hRuler + 2, Math.max(lay.hRuler + 2, h - boxH - 4));
-        ctx.fillStyle = "rgba(16, 16, 20, 0.94)";
+        const bx = Math.round(clamp(rawX, 6, Math.max(6, w - boxW - 6)));
+        const by = Math.round(clamp(tipY, lay.hRuler + 2, Math.max(lay.hRuler + 2, h - boxH - 4)));
+        ctx.fillStyle = "#121318";
         ctx.fillRect(bx, by, boxW, boxH);
         ctx.strokeStyle = accentColor;
         ctx.lineWidth = 1;
         ctx.strokeRect(bx + 0.5, by + 0.5, boxW - 1, boxH - 1);
         ctx.fillStyle = "#ececf0";
         ctx.textAlign = "left";
-        ctx.fillText(tipText, bx + 7, by + 13);
+        ctx.textBaseline = "middle";
+        const fittedTip = fitTextEllipsis(ctx, tipText, boxW - padX * 2);
+        ctx.fillText(fittedTip, bx + padX, Math.round(by + boxH / 2));
         ctx.restore();
       }
     }

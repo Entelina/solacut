@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
+import os
 import socket
 import sys
 import threading
@@ -37,6 +39,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 BRAND_NAME = "Solacut"
+_WINDOW_STATE_PATH = _PROJECT_ROOT / ".window_state.json"
 
 
 def _ensure_stdio_streams() -> None:
@@ -148,13 +151,15 @@ class EmbeddedBackendServer:
 class DesktopWindowBridge:
     """暴露给前端 `window.pywebview.api` 的原生桌面窗口控制桥。"""
 
-    def __init__(self, on_close_cb: Any = None) -> None:
+    def __init__(self, on_close_cb: Any = None, state_path: Path | None = None) -> None:
         self._window: Any = None
         self._on_close_cb = on_close_cb
+        self._state_path: Path = state_path or _WINDOW_STATE_PATH
         self._is_maximized: bool = False
         self._is_fullscreen: bool = False
         self._saved_bounds: tuple[int, int, int, int] | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._resize_hooked: bool = False
 
     def bind_window(self, window: Any, start_fullscreen: bool = False) -> None:
         self._window = window
@@ -200,14 +205,223 @@ class DesktopWindowBridge:
         else:
             fn(native)
 
+    def _sync_native_state_from_form(self, native: Any) -> bool:
+        """同步 WinForms 原生最大化状态（含 Aero Snap / Win+↑ 与 WorkingArea 铺满），返回 maximized 是否发生变化。"""
+        if native is None or sys.platform != "win32" or self._is_fullscreen:
+            return False
+        if getattr(native, "IsDisposed", False) or getattr(native, "Disposing", False):
+            return False
+        try:
+            import System.Windows.Forms as WinForms
+
+            ws = native.WindowState
+            if ws == WinForms.FormWindowState.Minimized:
+                return False
+
+            prev_max = self._is_maximized
+            if ws == WinForms.FormWindowState.Maximized:
+                self._is_maximized = True
+                if self._saved_bounds is None:
+                    rb = getattr(native, "RestoreBounds", None)
+                    if rb is not None and int(rb.Width) >= 800 and int(rb.Height) >= 500:
+                        self._saved_bounds = (
+                            int(rb.X),
+                            int(rb.Y),
+                            int(rb.Width),
+                            int(rb.Height),
+                        )
+            else:
+                nx = int(native.Location.X)
+                ny = int(native.Location.Y)
+                nw = int(native.Size.Width)
+                nh = int(native.Size.Height)
+                area = WinForms.Screen.FromControl(native).WorkingArea
+                is_workarea_max = (
+                    abs(nx - int(area.X)) <= 4
+                    and abs(ny - int(area.Y)) <= 4
+                    and abs(nw - int(area.Width)) <= 4
+                    and abs(nh - int(area.Height)) <= 4
+                )
+                if is_workarea_max:
+                    self._is_maximized = True
+                else:
+                    self._is_maximized = False
+                    if nw >= 800 and nh >= 500:
+                        self._saved_bounds = (nx, ny, nw, nh)
+            return self._is_maximized != prev_max
+        except Exception:
+            return False
+
+    def _notify_frontend_window_state(self) -> None:
+        """在后台线程安全将宿主最新窗口状态推送至前端（不阻塞 WinForms UI 消息泵）。"""
+        win = self._window
+        if win is None:
+            return
+        payload = {
+            "is_desktop": True,
+            "maximized": self._is_maximized,
+            "fullscreen": self._is_fullscreen,
+            "platform": sys.platform,
+        }
+        script = f"window.syncDesktopStateFromHost?.({json.dumps(payload)})"
+
+        def _push() -> None:
+            try:
+                win.run_js(script)
+            except Exception:
+                pass
+
+        threading.Thread(target=_push, name="solacut-ui-sync", daemon=True).start()
+
+    def apply_initial_maximize_and_hooks(self, start_maximized: bool = False) -> None:
+        """在窗口显示后应用首次/恢复最大化状态，并挂载 WinForms SizeChanged 监听实时同步系统 Snap 状态。"""
+        win = self._window
+        if win is None:
+            return
+
+        def _setup(native: Any) -> None:
+            if native is None or sys.platform != "win32":
+                if start_maximized and not self._is_fullscreen:
+                    win.maximize()
+                    self._is_maximized = True
+                return
+
+            import System.Windows.Forms as WinForms
+            from System.Drawing import Point, Size
+
+            if start_maximized and not self._is_fullscreen:
+                if self._saved_bounds is None:
+                    nx = int(native.Location.X)
+                    ny = int(native.Location.Y)
+                    nw = int(native.Size.Width)
+                    nh = int(native.Size.Height)
+                    if nw >= 800 and nh >= 500:
+                        self._saved_bounds = (nx, ny, nw, nh)
+                area = WinForms.Screen.FromControl(native).WorkingArea
+                native.WindowState = WinForms.FormWindowState.Normal
+                native.Location = Point(int(area.X), int(area.Y))
+                native.Size = Size(int(area.Width), int(area.Height))
+                self._is_maximized = True
+                self._notify_frontend_window_state()
+
+            if not self._resize_hooked:
+                def _on_size_changed(_sender: Any, _evt: Any) -> None:
+                    if self._sync_native_state_from_form(native):
+                        self._notify_frontend_window_state()
+
+                native.SizeChanged += _on_size_changed
+                self._resize_hooked = True
+
+        self._run_on_ui_thread(_setup)
+
     def get_window_state(self) -> dict[str, Any]:
         """返回当前桌面窗口状态供前端同步按钮图标与边框热区。"""
+        win = self._window
+        if win is not None and sys.platform == "win32" and getattr(win, "native", None) is not None:
+            self._run_on_ui_thread(self._sync_native_state_from_form)
         return {
             "is_desktop": True,
             "maximized": self._is_maximized,
             "fullscreen": self._is_fullscreen,
             "platform": sys.platform,
         }
+
+    def save_window_state(self, state_path: Path | None = None) -> dict[str, Any] | None:
+        """采集并持久化当前非最小化窗口几何状态至 .window_state.json。"""
+        win = self._window
+        if win is None:
+            return None
+
+        target_path = state_path or self._state_path
+        captured: dict[str, Any] = {}
+
+        def _collect(native: Any) -> None:
+            if native is not None and sys.platform == "win32":
+                if getattr(native, "IsDisposed", False) or getattr(native, "Disposing", False):
+                    if self._saved_bounds is not None:
+                        sx, sy, sw, sh = self._saved_bounds
+                        captured.update(
+                            {"x": sx, "y": sy, "width": sw, "height": sh, "maximized": bool(self._is_maximized)}
+                        )
+                    return
+                import System.Windows.Forms as WinForms
+
+                ws = native.WindowState
+                if ws == WinForms.FormWindowState.Minimized:
+                    if self._saved_bounds is not None:
+                        sx, sy, sw, sh = self._saved_bounds
+                        captured.update(
+                            {"x": sx, "y": sy, "width": sw, "height": sh, "maximized": bool(self._is_maximized)}
+                        )
+                    return
+
+                self._sync_native_state_from_form(native)
+                if self._is_maximized or self._is_fullscreen:
+                    bounds = self._saved_bounds
+                    if bounds is None:
+                        rb = getattr(native, "RestoreBounds", None)
+                        if rb is not None and int(rb.Width) >= 800 and int(rb.Height) >= 500:
+                            bounds = (int(rb.X), int(rb.Y), int(rb.Width), int(rb.Height))
+                    if bounds is not None:
+                        sx, sy, sw, sh = bounds
+                        captured.update(
+                            {"x": sx, "y": sy, "width": sw, "height": sh, "maximized": bool(self._is_maximized)}
+                        )
+                else:
+                    nx = int(native.Location.X)
+                    ny = int(native.Location.Y)
+                    nw = int(native.Size.Width)
+                    nh = int(native.Size.Height)
+                    if nw >= 800 and nh >= 500:
+                        captured.update({"x": nx, "y": ny, "width": nw, "height": nh, "maximized": False})
+                return
+
+            # 跨平台或无原生句柄兜底
+            if self._is_maximized and self._saved_bounds is not None:
+                sx, sy, sw, sh = self._saved_bounds
+                captured.update({"x": sx, "y": sy, "width": sw, "height": sh, "maximized": True})
+                return
+            wx = getattr(win, "x", None)
+            wy = getattr(win, "y", None)
+            ww = getattr(win, "width", None)
+            wh = getattr(win, "height", None)
+            if (
+                _is_strict_int(ww)
+                and _is_strict_int(wh)
+                and ww >= 800
+                and wh >= 500
+            ):
+                captured.update(
+                    {
+                        "x": wx if _is_strict_int(wx) else None,
+                        "y": wy if _is_strict_int(wy) else None,
+                        "width": ww,
+                        "height": wh,
+                        "maximized": bool(self._is_maximized),
+                    }
+                )
+            elif self._saved_bounds is not None:
+                sx, sy, sw, sh = self._saved_bounds
+                captured.update(
+                    {"x": sx, "y": sy, "width": sw, "height": sh, "maximized": bool(self._is_maximized)}
+                )
+
+        try:
+            self._run_on_ui_thread(_collect)
+        except Exception:
+            return None
+
+        if not captured:
+            return None
+        w = captured.get("width")
+        h = captured.get("height")
+        if not (_is_strict_int(w) and _is_strict_int(h) and 800 <= w <= 16384 and 500 <= h <= 16384):
+            return None
+        try:
+            _write_window_state_atomic(captured, target_path)
+            return captured
+        except Exception:
+            return None
 
     def minimize(self) -> dict[str, Any]:
         if self._window is not None:
@@ -239,8 +453,7 @@ class DesktopWindowBridge:
                 from System.Drawing import Point, Size
 
                 # 实时同步系统 Aero Snap / Win+Up 的真实最大化状态
-                if native.WindowState == WinForms.FormWindowState.Maximized:
-                    self._is_maximized = True
+                self._sync_native_state_from_form(native)
 
                 if not self._is_maximized:
                     self._saved_bounds = (
@@ -290,6 +503,7 @@ class DesktopWindowBridge:
                 return
             import System.Windows.Forms as WinForms
 
+            self._sync_native_state_from_form(native)
             if (self._is_maximized or native.WindowState == WinForms.FormWindowState.Maximized) and self._saved_bounds is not None:
                 from System.Drawing import Point, Size
 
@@ -330,28 +544,121 @@ class DesktopWindowBridge:
         return self.get_window_state()
 
     def close(self) -> None:
+        try:
+            self.save_window_state()
+        except Exception:
+            pass
         if self._window is not None:
             self._window.destroy()
         if callable(self._on_close_cb):
             self._on_close_cb()
 
 
-def _compute_initial_window_geometry() -> tuple[int, int]:
-    """根据当前主屏幕分辨率计算舒适的初始桌面窗口逻辑尺寸（约 90% 工作区，上限 1600x960）。"""
+def _is_strict_int(val: Any) -> bool:
+    return isinstance(val, int) and not isinstance(val, bool)
+
+
+def _get_screen_working_areas() -> list[tuple[int, int, int, int]]:
+    """返回当前所有显示器 WorkingArea 列表 [(x, y, right, bottom), ...]。"""
+    if sys.platform != "win32":
+        return []
+    try:
+        import System.Windows.Forms as WinForms
+
+        areas: list[tuple[int, int, int, int]] = []
+        for scr in WinForms.Screen.AllScreens:
+            wa = scr.WorkingArea
+            areas.append((int(wa.X), int(wa.Y), int(wa.Right), int(wa.Bottom)))
+        return areas
+    except Exception:
+        return []
+
+
+def _is_rect_visible_on_screens(x: int, y: int, width: int, height: int) -> bool:
+    """校验窗口矩形是否至少部分位于任意有效显示器工作区内（支持多屏负坐标）。"""
+    if width < 800 or height < 500 or width > 16384 or height > 16384:
+        return False
+    areas = _get_screen_working_areas()
+    if not areas:
+        return -32000 <= x <= 32000 and -32000 <= y <= 32000
+    for ax, ay, aright, abottom in areas:
+        overlap_w = min(x + width, aright) - max(x, ax)
+        overlap_h = min(y + height, abottom) - max(y, ay)
+        titlebar_visible = min(y + 48, abottom) > ay and y < abottom - 32
+        if overlap_w >= 120 and overlap_h >= 60 and titlebar_visible:
+            return True
+    return False
+
+
+def _load_window_state(state_path: Path | None = None) -> dict[str, Any] | None:
+    """安全加载历史窗口几何状态，自动过滤损坏数据或脱离有效屏幕工作区的坐标。"""
+    path = state_path or _WINDOW_STATE_PATH
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    width = raw.get("width")
+    height = raw.get("height")
+    if not (_is_strict_int(width) and _is_strict_int(height)):
+        return None
+    if width < 800 or height < 500 or width > 16384 or height > 16384:
+        return None
+
+    x = raw.get("x")
+    y = raw.get("y")
+    valid_pos: tuple[int | None, int | None] = (None, None)
+    if _is_strict_int(x) and _is_strict_int(y):
+        if _is_rect_visible_on_screens(x, y, width, height):
+            valid_pos = (x, y)
+
+    return {
+        "x": valid_pos[0],
+        "y": valid_pos[1],
+        "width": max(1024, width),
+        "height": max(640, height),
+        "maximized": bool(raw.get("maximized", False)),
+    }
+
+
+def _write_window_state_atomic(payload: dict[str, Any], state_path: Path) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = state_path.with_name(f"{state_path.name}.tmp.{os.getpid()}.{threading.get_ident()}")
+    try:
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_path, state_path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+
+def _compute_initial_window_geometry() -> tuple[int, int, bool]:
+    """根据当前主屏幕分辨率计算初始桌面窗口逻辑尺寸及是否自动铺满工作区。"""
     default_w, default_h = 1440, 860
     if sys.platform != "win32":
-        return default_w, default_h
+        return default_w, default_h, False
     try:
         user32 = ctypes.windll.user32
         screen_w = int(user32.GetSystemMetrics(0))
         screen_h = int(user32.GetSystemMetrics(1))
         if screen_w > 0 and screen_h > 0:
-            w = max(1120, min(1680, int(screen_w * 0.88)))
-            h = max(680, min(980, int(screen_h * 0.86)))
-            return w, h
+            if screen_w <= 1600 or screen_h <= 920:
+                w = max(1120, int(screen_w * 0.92))
+                h = max(680, int(screen_h * 0.90))
+                return w, h, True
+            w = max(1120, int(screen_w * 0.90))
+            h = max(680, int(screen_h * 0.88))
+            return w, h, False
     except Exception:
         pass
-    return default_w, default_h
+    return default_w, default_h, False
 
 
 _WM_SETICON = 0x0080
@@ -488,7 +795,20 @@ def _run_desktop_app(args: argparse.Namespace) -> int:
         return 1
 
     bridge = DesktopWindowBridge(on_close_cb=backend.stop)
-    init_w, init_h = _compute_initial_window_geometry()
+    saved_state = _load_window_state()
+    init_w, init_h, auto_max = _compute_initial_window_geometry()
+    init_x: int | None = None
+    init_y: int | None = None
+    start_maximized = auto_max
+    if saved_state is not None:
+        init_w = int(saved_state["width"])
+        init_h = int(saved_state["height"])
+        init_x = saved_state["x"]
+        init_y = saved_state["y"]
+        start_maximized = bool(saved_state["maximized"])
+        if init_x is not None and init_y is not None:
+            bridge._saved_bounds = (init_x, init_y, init_w, init_h)
+
     storage_dir = _PROJECT_ROOT / "output" / ".webview_profile"
     storage_dir.mkdir(parents=True, exist_ok=True)
     icon_path = _resolve_app_icon_path()
@@ -499,6 +819,8 @@ def _run_desktop_app(args: argparse.Namespace) -> int:
         js_api=bridge,
         width=init_w,
         height=init_h,
+        x=init_x,
+        y=init_y,
         min_size=(1024, 640),
         resizable=True,
         frameless=True,
@@ -509,8 +831,17 @@ def _run_desktop_app(args: argparse.Namespace) -> int:
         text_select=True,
     )
     bridge.bind_window(window, start_fullscreen=bool(args.fullscreen))
-    window.events.shown += lambda: _apply_native_window_icon(bridge, icon_path)
+
+    def _on_shown() -> None:
+        _apply_native_window_icon(bridge, icon_path)
+        bridge.apply_initial_maximize_and_hooks(start_maximized=start_maximized and not bool(args.fullscreen))
+
+    def _on_closing() -> None:
+        bridge.save_window_state()
+
+    window.events.shown += _on_shown
     window.events.loaded += lambda: _apply_native_window_icon(bridge, icon_path)
+    window.events.closing += _on_closing
     window.events.closed += lambda: backend.stop()
 
     try:

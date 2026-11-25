@@ -1266,8 +1266,110 @@ function refreshAllUiLocale() {
   filterShortcutsTable(el("shortcut-search-input")?.value || "");
 }
 
+const UI_SCALE_STEPS = [90, 100, 110, 125];
+
+function getUiScalePct() {
+  try {
+    const raw = Number(
+      document.documentElement.dataset.uiScale || localStorage.getItem("solacut_ui_scale") || 100
+    );
+    if (UI_SCALE_STEPS.includes(raw)) return raw;
+  } catch {}
+  return 100;
+}
+
+function applyUiScale(pct, persist = true) {
+  const num = Number(pct);
+  const resolved = UI_SCALE_STEPS.includes(num) ? num : 100;
+  const ratio = resolved / 100;
+  document.documentElement.dataset.uiScale = String(resolved);
+  document.documentElement.style.setProperty("--ui-zoom", String(ratio));
+  document.documentElement.style.zoom = resolved === 100 ? "" : String(ratio);
+  const sel = el("cfg-ui-scale");
+  if (sel && sel.value !== String(resolved)) {
+    sel.value = String(resolved);
+  }
+  if (persist) {
+    try {
+      localStorage.setItem("solacut_ui_scale", String(resolved));
+    } catch {}
+  }
+  requestAnimationFrame(() => {
+    timelineEngine?.requestDraw();
+    monitorEngine?.syncSafeGuideLayout?.();
+    monitorEngine?.refreshFrameUI?.();
+    monitorEngine?.audioMeter?.draw?.();
+    monitorEngine?.scrubber?.draw?.();
+  });
+}
+
+function stepUiScale(delta) {
+  const cur = getUiScalePct();
+  const idx = UI_SCALE_STEPS.indexOf(cur);
+  const nextIdx = Math.max(0, Math.min(UI_SCALE_STEPS.length - 1, (idx < 0 ? 1 : idx) + delta));
+  const next = UI_SCALE_STEPS[nextIdx];
+  applyUiScale(next, true);
+  setStatusMessage(`${t("dlg.cfg.uiScale")}: ${next}%`);
+}
+
+function getMediaCacheVersion(video) {
+  const token =
+    video?.cache_token ||
+    video?.video_mtime_ns ||
+    (video?.size_mb != null ? `${video.size_mb}_${video.total_duration_sec || 0}` : "1");
+  return encodeURIComponent(String(token));
+}
+
+function showDarkroomConfirmDialog({ title = "", message = "", confirmText = "" } = {}) {
+  const dlg = el("confirm-dialog");
+  if (!dlg || typeof dlg.showModal !== "function") {
+    return Promise.resolve(window.confirm(message || title));
+  }
+  const titleEl = el("confirm-dialog-title");
+  const msgEl = el("confirm-dialog-message");
+  const okEl = el("confirm-dialog-ok");
+  if (titleEl) titleEl.textContent = title || t("dlg.confirm.title");
+  if (msgEl) msgEl.textContent = message || "";
+  if (okEl) okEl.textContent = confirmText || t("common.confirm");
+
+  return new Promise((resolve) => {
+    dlg.returnValue = "cancel";
+    dlg.addEventListener(
+      "close",
+      () => {
+        resolve(dlg.returnValue === "confirm");
+      },
+      { once: true }
+    );
+    dlg.showModal();
+  });
+}
+
+function localizeTaskMessage(rawMsg) {
+  const text = String(rawMsg || "").trim();
+  if (!text || getUiLang() === "zh" || !/[\u4e00-\u9fff]/.test(text)) {
+    return text;
+  }
+  const prefixMatch = text.match(/^(\[[^\]]+\]\s*)/);
+  const prefix = prefixMatch ? prefixMatch[1] : "";
+  const body = prefix ? text.slice(prefix.length) : text;
+  if (/重新翻译/.test(body)) return `${prefix}Retranslating selected subtitles...`;
+  if (/翻译|润色/.test(body)) return `${prefix}Translating subtitles...`;
+  if (/抽取音频|提取音频|16k/i.test(body)) return `${prefix}Extracting audio...`;
+  if (/体检|声学|峰值|波形/.test(body)) return `${prefix}Analyzing audio energy...`;
+  if (/识别|转写|ASR|Whisper/i.test(body)) return `${prefix}Transcribing speech...`;
+  if (/初筛|筛选|高光/.test(body)) return `${prefix}Screening highlight candidates...`;
+  if (/导出|渲染|压制|切片/.test(body)) return `${prefix}Exporting clips...`;
+  if (/词库|语料|索引/.test(body)) return `${prefix}Building corpus index...`;
+  if (/弹幕/.test(body)) return `${prefix}Indexing chat log...`;
+  if (/完成/.test(body)) return `${prefix}Completed`;
+  if (/失败|错误/.test(body)) return `${prefix}Task failed`;
+  return `${prefix}Processing...`;
+}
+
 function initUiLanguageSwitcher() {
   syncUiLanguageControls();
+  applyUiScale(getUiScalePct(), false);
   wireMenuPopoverInteractions(el("btn-ui-lang"), el("ui-lang-menu"), el("ui-lang-menu-list"), {
     preferUp: false,
     onBeforeOpen: () => syncUiLanguageControls(),
@@ -1284,6 +1386,10 @@ function initUiLanguageSwitcher() {
 
   el("cfg-ui-lang")?.addEventListener("change", (e) => {
     window.SolacutI18n?.setLang(e.target.value);
+  });
+
+  el("cfg-ui-scale")?.addEventListener("change", (e) => {
+    applyUiScale(e.target.value, true);
   });
 
   window.SolacutI18n?.onChange(() => {
@@ -2053,8 +2159,8 @@ function renderVideoList() {
       img.loading = "lazy";
       img.decoding = "async";
       img.alt = video.filename;
-      // 修复 P1-09：与后端 /api/thumbnail?path=...&time=...&w=... 参数严格一致
-      img.src = `/api/thumbnail?path=${encodeURIComponent(video.video_path)}&time=${thumbSec.toFixed(1)}&w=320`;
+      // 修复 P1-09：与后端 /api/thumbnail?path=...&time=...&w=... 参数严格一致，并附加 cache_token 穿透旧缓存
+      img.src = `/api/thumbnail?path=${encodeURIComponent(video.video_path)}&time=${thumbSec.toFixed(1)}&w=320&v=${getMediaCacheVersion(video)}`;
       img.addEventListener("load", () => fallback.classList.add("hidden"));
       img.addEventListener("error", () => {
         img.classList.add("hidden");
@@ -2218,10 +2324,13 @@ async function loadAudioStreamsForVideo(video) {
 async function loadMediaInfoForVideo(video) {
   if (!video) return;
   const reqSeq = ++state.mediaInfoSeq;
+  const cacheVer = getMediaCacheVersion(video);
+  const mediaCacheKey = `${video.video_path}::${video.cache_token || ""}`;
   try {
-    const info = await apiFetch(`/api/media-info?path=${encodeURIComponent(video.video_path)}`);
+    const info = await apiFetch(`/api/media-info?path=${encodeURIComponent(video.video_path)}&v=${cacheVer}`);
     if (reqSeq !== state.mediaInfoSeq) return;
     state.mediaInfoCache.set(video.video_path, info);
+    state.mediaInfoCache.set(mediaCacheKey, info);
     state.videoFps = Math.max(1, Number(info?.fps) || 30);
     monitorEngine?.setMediaInfo(info);
     const fpsBadge = el("tl-fps-badge");
@@ -2230,7 +2339,7 @@ async function loadMediaInfoForVideo(video) {
     }
     timelineEngine?.setMedia({
       stem: video.stem,
-      mediaKey: video.video_path,
+      mediaKey: mediaCacheKey,
       duration: Number(info?.duration_sec) || Number(video.total_duration_sec) || el("review-video")?.duration || 0,
       fps: state.videoFps,
       resetView: false,
@@ -2247,9 +2356,10 @@ async function loadOverviewWaveformForVideo(video) {
   if (!video || !timelineEngine) return;
   const seq = ++state.waveformSeq;
   const outDir = encodeURIComponent(el("output-dir-field").value.trim());
+  const cacheVer = getMediaCacheVersion(video);
   try {
     const wf = await apiFetch(
-      `/api/waveform?stem=${encodeURIComponent(video.stem)}&output_dir=${outDir}&points=1200`
+      `/api/waveform?stem=${encodeURIComponent(video.stem)}&output_dir=${outDir}&points=1200&v=${cacheVer}`
     );
     if (seq !== state.waveformSeq) return;
     timelineEngine.setOverviewWaveform(wf);
@@ -2262,7 +2372,7 @@ async function loadOverviewWaveformForVideo(video) {
   if (video.has_peaks) {
     try {
       const diag = await apiFetch(
-        `/api/diagnostics?stem=${encodeURIComponent(video.stem)}&output_dir=${outDir}`
+        `/api/diagnostics?stem=${encodeURIComponent(video.stem)}&output_dir=${outDir}&v=${cacheVer}`
       );
       if (seq !== state.waveformSeq) return;
       timelineEngine.setPeakSegments(diag.peak_segments || []);
@@ -3041,9 +3151,14 @@ function getVideoDurationLimit() {
   return domDur || metaDur || 86400;
 }
 
-async function selectActiveVideo(video) {
+async function selectActiveVideo(video, { forceReload = false } = {}) {
   stopShuttle(true);
-  const isDifferentVideo = !state.activeVideo || state.activeVideo.video_path !== video.video_path;
+  const isDifferentVideo = Boolean(
+    forceReload ||
+      !state.activeVideo ||
+      state.activeVideo.video_path !== video.video_path ||
+      (video.cache_token && state.activeVideo.cache_token && state.activeVideo.cache_token !== video.cache_token)
+  );
 
   // 修复 P0-01：切换不同视频前立即 Flush 未落盘的 600ms 防抖保存，彻底消灭静默丢修改与“待保存*”卡死
   if (isDifferentVideo && state.saveTimer && state.highlightsData) {
@@ -3112,14 +3227,15 @@ async function selectActiveVideo(video) {
   if (streamTag) streamTag.textContent = `#${Number(video.audio_stream || 0)}`;
 
   const videoPlayer = el("review-video");
-  const streamUrl = `/api/video-stream?path=${encodeURIComponent(video.video_path)}`;
-  if (videoPlayer.getAttribute("src") !== streamUrl) {
+  const streamUrl = `/api/video-stream?path=${encodeURIComponent(video.video_path)}&v=${getMediaCacheVersion(video)}`;
+  if (videoPlayer.getAttribute("src") !== streamUrl || forceReload) {
     videoPlayer.src = streamUrl;
+    videoPlayer.load();
   }
 
   timelineEngine?.setMedia({
     stem: video.stem,
-    mediaKey: video.video_path,
+    mediaKey: `${video.video_path}::${video.cache_token || ""}`,
     duration: Number(video.total_duration_sec) || 0,
     fps: state.videoFps,
     resetView: isDifferentVideo,
@@ -3174,9 +3290,10 @@ function renderDiagnosticsBar(diag = state.activeVideo?.diagnostics) {
   const gradeBadge = el("diag-grade-badge");
   const gradeCode = diag.grade || "A";
   gradeBadge.dataset.grade = gradeCode;
-  const localizedGradeDesc = t(`diag.grade.${gradeCode}`);
-  gradeBadge.textContent = getUiLang() === "zh" ? (diag.grade_label || gradeCode) : gradeCode;
-  gradeBadge.title = localizedGradeDesc;
+  const localizedGradeLabel = t(`diag.gradeLabel.${gradeCode}`);
+  const localizedAdvice = t(`diag.advice.${gradeCode}`);
+  gradeBadge.textContent = localizedGradeLabel;
+  gradeBadge.title = localizedAdvice;
 
   const active = state.activeVideo;
   let audioMetaSuffix = "";
@@ -3194,13 +3311,19 @@ function renderDiagnosticsBar(diag = state.activeVideo?.diagnostics) {
     metricParts.push(String(diag.golden_bucket_label));
   }
   el("diag-metrics-text").textContent = `${metricParts.join(" · ")}${audioMetaSuffix}`.replace(/^ · /, "");
-  const adviceText = getUiLang() === "zh" ? (diag.advice || "") : localizedGradeDesc;
-  el("diag-advice-text").textContent = adviceText;
-  el("diag-advice-text").title = adviceText;
+  el("diag-advice-text").textContent = localizedAdvice;
+  el("diag-advice-text").title = localizedAdvice;
 
   const rec = diag.recommendation || {};
   const modeText = rec.asr_mode === "full" ? t("diag.fullMode") : `Top ${rec.top_k_peaks ?? 10}`;
-  el("diag-rec-summary").textContent = modeText;
+  const recSummaryEl = el("diag-rec-summary");
+  recSummaryEl.textContent = modeText;
+  const recReasonCode = rec.reason_code || diag.rec_reason_code || "";
+  if (recReasonCode) {
+    recSummaryEl.title = t(`diag.recReason.${recReasonCode}`);
+  } else {
+    recSummaryEl.removeAttribute("title");
+  }
 
   const barsBox = el("diag-heatmap-bars");
   barsBox.replaceChildren();
@@ -3504,6 +3627,20 @@ function selectActiveClip(item, shouldPreview = false) {
   syncMonitorClipContext();
   if (shouldPreview) {
     previewHighlightSegment(item);
+  } else {
+    const videoEl = el("review-video");
+    if (
+      videoEl?.src &&
+      (videoEl.paused || (state.previewSegment && Number(state.previewSegment.rank) !== Number(item.rank)))
+    ) {
+      const targetSec = Number(item.start_sec) || 0;
+      state.previewSegment = null;
+      recordUserSeekDeadAirBypass(targetSec);
+      videoEl.currentTime = targetSec;
+      timelineEngine?.setPlayhead(targetSec);
+      monitorEngine?.refreshFrameUI();
+      syncVideoSubtitleOverlay();
+    }
   }
 }
 
@@ -3726,6 +3863,10 @@ function updateHighlightSelectionBadges() {
     ? t("insp.export.exportReviewedBtn", { count: effectiveCount })
     : t("insp.export.exportBtn", { count: effectiveCount });
   el("btn-export-selected").disabled = effectiveCount === 0;
+  const onlyRevHint = el("export-only-reviewed-hint");
+  if (onlyRevHint) {
+    onlyRevHint.classList.toggle("hidden", !(onlyReviewed && selectedTotal > 0 && reviewedSelectedTotal === 0));
+  }
   updateStatusBarCounts();
 }
 
@@ -3757,7 +3898,10 @@ function syncHighlightRowStates() {
     const subsTd = row.querySelector(".clip-col-subs");
     const dur = Math.max(0, Number(item.end_sec) - Number(item.start_sec));
     const { tgtTitle } = resolveClipTitles(item, lp);
-    if (spanTd) spanTd.textContent = `${formatClock(item.start_sec)}–${formatClock(item.end_sec)}`;
+    if (spanTd) {
+      spanTd.textContent = formatClock(item.start_sec);
+      spanTd.title = `${formatClock(item.start_sec)}–${formatClock(item.end_sec)}`;
+    }
     if (durTd) durTd.textContent = `${dur.toFixed(1)}s`;
     if (titleTd) {
       titleTd.textContent = tgtTitle;
@@ -3958,7 +4102,7 @@ function renderHighlightsList() {
     ["clip-col-rank", "#"],
     ["clip-col-review", t("clips.colReview")],
     ["clip-col-score", t("clips.colScore")],
-    ["clip-col-span", t("clips.colSpan")],
+    ["clip-col-span", t("clips.colStart")],
     ["clip-col-dur", t("clips.colDur")],
     ["clip-col-title", t("clips.colTitle")],
     ["clip-col-subs", t("clips.colSubs")],
@@ -4034,7 +4178,8 @@ function renderHighlightsList() {
 
     const tdSpan = document.createElement("td");
     tdSpan.className = "clip-col-span mono-num";
-    tdSpan.textContent = `${formatClock(item.start_sec)}–${formatClock(item.end_sec)}`;
+    tdSpan.textContent = formatClock(item.start_sec);
+    tdSpan.title = `${formatClock(item.start_sec)}–${formatClock(item.end_sec)}`;
 
     const tdDur = document.createElement("td");
     tdDur.className = "clip-col-dur mono-num";
@@ -4121,7 +4266,7 @@ function renderHighlightsList() {
         },
         {
           label: t("clips.ctx.include"),
-          hint: "S",
+          hint: "D",
           checked: item.selected !== false,
           onSelect: () => {
             item.selected = item.selected === false;
@@ -4912,18 +5057,25 @@ function splitSubtitleLineAtTime(item, subIndex, cutSec = null) {
   return true;
 }
 
-function splitSubtitleAtPlayhead() {
+function splitSubtitleAtPlayhead({ silent = false } = {}) {
   const videoEl = el("review-video");
-  if (!videoEl || !state.highlightsData) return;
+  if (!videoEl || !state.highlightsData) return false;
   const curT = Number(videoEl.currentTime || 0);
   const hit = findSubtitleAtTime(curT);
   if (!hit) {
-    setStatusMessage(t("sub.noHitAtPlayhead"), true);
-    return;
+    if (!silent) setStatusMessage(t("sub.noHitAtPlayhead"), true);
+    return false;
   }
   const item = getClipByRank(hit.rank);
-  if (!item) return;
-  splitSubtitleLineAtTime(item, hit.index, curT);
+  if (!item) return false;
+  return Boolean(splitSubtitleLineAtTime(item, hit.index, curT));
+}
+
+function smartSplitAtPlayhead() {
+  if (splitSubtitleAtPlayhead({ silent: true })) return true;
+  if (splitActiveClipAtPlayhead({ silent: true })) return true;
+  setStatusMessage(t("toast.splitFallbackHint"), true);
+  return false;
 }
 
 /* ==================== 本地达芬奇 21.1 逆向 P0 剪辑/标记/索引/字幕查找替换动作 ==================== */
@@ -5008,19 +5160,19 @@ function trimClipToPlayhead(edge) {
   setStatusMessage(t(edge === "start" ? "toast.trimmedStart" : "toast.trimmedEnd", { rank: target.rank, tc: tcStr }));
 }
 
-function splitActiveClipAtPlayhead() {
+function splitActiveClipAtPlayhead({ silent = false } = {}) {
   const videoEl = el("review-video");
   const list = state.highlightsData?.highlights;
   const target = getClipByRank(state.previewSegment?.rank ?? state.activeClipRank);
   if (!videoEl || !Array.isArray(list) || !target) {
-    setStatusMessage(t("toast.selectClipFirst"), true);
+    if (!silent) setStatusMessage(t("toast.selectClipFirst"), true);
     return false;
   }
   const curT = Number((videoEl.currentTime || 0).toFixed(2));
   const st = Number(target.start_sec || 0);
   const ed = Number(target.end_sec || 0);
   if (curT <= st + 1.0 || curT >= ed - 1.0) {
-    setStatusMessage(t("toast.splitClipNeedMargin"), true);
+    if (!silent) setStatusMessage(t("toast.splitClipNeedMargin"), true);
     return false;
   }
 
@@ -5457,7 +5609,7 @@ function initAppMenuBar() {
         return [
           {
             label: t("menu.clip.toggleExport"),
-            hint: "D / S",
+            hint: "D",
             checked: Boolean(cur && cur.selected !== false),
             disabled: !cur,
             onSelect: () => toggleActiveClipEnabled(),
@@ -5557,6 +5709,25 @@ function initAppMenuBar() {
           hint: "F11",
           checked: Boolean(desktopState.fullscreen),
           onSelect: () => toggleAppFullscreen(),
+        },
+        { type: "separator" },
+        {
+          label: t("menu.view.zoomIn"),
+          hint: "Ctrl+=",
+          disabled: getUiScalePct() >= UI_SCALE_STEPS[UI_SCALE_STEPS.length - 1],
+          onSelect: () => stepUiScale(1),
+        },
+        {
+          label: t("menu.view.zoomOut"),
+          hint: "Ctrl+-",
+          disabled: getUiScalePct() <= UI_SCALE_STEPS[0],
+          onSelect: () => stepUiScale(-1),
+        },
+        {
+          label: t("menu.view.zoomReset"),
+          hint: "Ctrl+0",
+          checked: getUiScalePct() === 100,
+          onSelect: () => applyUiScale(100, true),
         },
         { type: "separator" },
         {
@@ -5830,7 +6001,7 @@ function initTimelineEngine() {
         { label: t("tl.ctx.focusClip"), onSelect: () => timelineEngine?.fitClip(clip) },
         {
           label: t("tl.ctx.toggleExport"),
-          hint: "D / S",
+          hint: "D",
           checked: clip.selected !== false,
           onSelect: () => {
             clip.selected = clip.selected === false;
@@ -5960,8 +6131,9 @@ function initTimelineEngine() {
     },
     onRequestWaveform: async (stem, start, end, points) => {
       const outDir = encodeURIComponent(el("output-dir-field").value.trim());
+      const cacheVer = getMediaCacheVersion(state.activeVideo);
       return apiFetch(
-        `/api/waveform?stem=${encodeURIComponent(stem)}&output_dir=${outDir}&start=${start.toFixed(2)}&end=${end.toFixed(2)}&points=${points}`
+        `/api/waveform?stem=${encodeURIComponent(stem)}&output_dir=${outDir}&start=${start.toFixed(2)}&end=${end.toFixed(2)}&points=${points}&v=${cacheVer}`
       );
     },
     onToolChange: (tool) => syncTimelineToolButtons(tool),
@@ -5976,10 +6148,7 @@ function initTimelineEngine() {
   el("btn-tl-tool-razor")?.addEventListener("click", () => timelineEngine?.setTool("razor"));
   el("chk-tl-snap")?.addEventListener("change", (e) => timelineEngine?.setSnap(e.target.checked));
   el("btn-tl-split-playhead")?.addEventListener("click", () => {
-    const videoElCur = el("review-video");
-    const hit = videoElCur ? findSubtitleAtTime(Number(videoElCur.currentTime || 0)) : null;
-    if (hit) splitSubtitleAtPlayhead();
-    else splitActiveClipAtPlayhead();
+    smartSplitAtPlayhead();
   });
   el("chk-tl-opt-full-wave")?.addEventListener("change", (e) =>
     timelineEngine?.setViewOptions({ fullWaveform: e.target.checked })
@@ -6041,7 +6210,7 @@ function initTimelineEngine() {
     if (state.activeVideo && videoEl.duration) {
       timelineEngine?.setMedia({
         stem: state.activeVideo.stem,
-        mediaKey: state.activeVideo.video_path,
+        mediaKey: `${state.activeVideo.video_path}::${state.activeVideo.cache_token || ""}`,
         duration: videoEl.duration,
         fps: state.videoFps,
         resetView: false,
@@ -6443,7 +6612,23 @@ function initPlayerEvents() {
       if (e.code === "Backslash") {
         e.preventDefault();
         if (e.shiftKey) splitActiveClipAtPlayhead();
-        else splitSubtitleAtPlayhead();
+        else smartSplitAtPlayhead();
+        return;
+      }
+      if (e.code === "Equal" || e.code === "NumpadAdd") {
+        e.preventDefault();
+        stepUiScale(1);
+        return;
+      }
+      if (e.code === "Minus" || e.code === "NumpadSubtract") {
+        e.preventDefault();
+        stepUiScale(-1);
+        return;
+      }
+      if (e.code === "Digit0" || e.code === "Numpad0") {
+        e.preventDefault();
+        applyUiScale(100, true);
+        setStatusMessage(`${t("dlg.cfg.uiScale")}: 100%`);
         return;
       }
       if (e.shiftKey && e.code === "BracketLeft") {
@@ -6634,8 +6819,7 @@ function initPlayerEvents() {
         videoEl.pause();
       }
     } else if (code === "Delete") {
-      const focusId = dock?.focusedPanelId;
-      if ((focusId === "clips" || focusId === "timeline") && state.activeClipRank != null) {
+      if (state.activeClipRank != null && !e.target?.closest?.("#pane-subtitles")) {
         e.preventDefault();
         deleteClipByRank(state.activeClipRank);
       }
@@ -6705,7 +6889,7 @@ function initPlayerEvents() {
       }
     } else if (code === "KeyC") {
       e.preventDefault();
-      splitSubtitleAtPlayhead();
+      smartSplitAtPlayhead();
     } else if (code === "KeyM") {
       e.preventDefault();
       const loopChk = el("chk-loop-segment");
@@ -6713,7 +6897,7 @@ function initPlayerEvents() {
         loopChk.checked = !loopChk.checked;
         setStatusMessage(loopChk.checked ? t("mon.loopOn") : t("mon.loopOff"));
       }
-    } else if ((code === "KeyS" || code === "KeyD") && state.highlightsData) {
+    } else if (code === "KeyD" && state.highlightsData) {
       e.preventDefault();
       toggleActiveClipEnabled();
     } else if (code === "KeyR" && state.highlightsData) {
@@ -6735,7 +6919,7 @@ function startTaskPolling(taskId) {
       consecutiveErrors = 0;
       const pill = el("global-task-pill");
       pill.dataset.state = task.status;
-      el("global-task-text").textContent = `${task.percent}% ${task.message}`;
+      el("global-task-text").textContent = `${task.percent}% ${localizeTaskMessage(task.message)}`;
       el("task-progress-label").textContent = `${task.percent}%`;
       el("task-progress-fill").style.width = `${task.percent}%`;
       const logPre = el("task-log-output");
@@ -6979,7 +7163,11 @@ async function triggerExport(specificRanks = null) {
         : allItems.filter((h) => h.selected !== false);
     const draftCount = targetItems.filter((h) => getClipReviewStatus(h) !== "reviewed").length;
     if (draftCount > 0) {
-      const ok = window.confirm(t("insp.export.confirmUnreviewedDrafts", { count: draftCount }));
+      const ok = await showDarkroomConfirmDialog({
+        title: t("dlg.confirm.draftExportTitle"),
+        message: t("dlg.confirm.draftExportMsg", { draftCount }),
+        confirmText: t("dlg.confirm.draftExportOk"),
+      });
       if (!ok) return;
     }
   }
@@ -7748,7 +7936,7 @@ async function loadDemoProjectIntoWorkbench() {
       (v) => v.stem === res.stem || v.video_path === res.video_path
     );
     if (target) {
-      await selectActiveVideo(target);
+      await selectActiveVideo(target, { forceReload: true });
       showToast(t("toast.demoLoaded"));
     } else {
       showToast(t("toast.demoImported"));
@@ -7831,17 +8019,26 @@ async function toggleAppFullscreen() {
 }
 
 function initDesktopShell() {
+  const applyHostState = (st) => {
+    if (!st) return;
+    desktopState.isDesktop = true;
+    desktopState.maximized = Boolean(st.maximized);
+    desktopState.fullscreen = Boolean(st.fullscreen);
+    syncDesktopWindowUI();
+  };
+
+  window.syncDesktopStateFromHost = applyHostState;
+
   const activateDesktopBridge = async () => {
     if (!window.pywebview?.api) return;
     desktopState.isDesktop = true;
     try {
       const st = await window.pywebview.api.get_window_state();
-      if (st) {
-        desktopState.maximized = Boolean(st.maximized);
-        desktopState.fullscreen = Boolean(st.fullscreen);
-      }
-    } catch {}
-    syncDesktopWindowUI();
+      if (st) applyHostState(st);
+      else syncDesktopWindowUI();
+    } catch {
+      syncDesktopWindowUI();
+    }
   };
 
   if (window.pywebview?.api) {
@@ -7849,6 +8046,14 @@ function initDesktopShell() {
   } else {
     window.addEventListener("pywebviewready", activateDesktopBridge, { once: true });
   }
+
+  window.addEventListener("focus", () => {
+    if (!desktopState.isDesktop || !window.pywebview?.api?.get_window_state) return;
+    window.pywebview.api
+      .get_window_state()
+      .then((st) => applyHostState(st))
+      .catch(() => {});
+  });
 
   const topbar = el("app-topbar");
   const isInteractiveInTopbar = (target) =>

@@ -754,10 +754,9 @@ def diagnose_stream_energy(
     total_duration_sec: float,
     rms_threshold: float,
 ) -> dict[str, Any]:
-    """根据 Step 1 音频峰值分布，快速诊断本场直播状态评级、黄金时段分布并给出推荐参数。
+    """根据 Step 1 音频峰值分布，快速诊断本场录像动态评级、峰值分布并给出推荐参数。
 
-    用于大公会操作员在 30 秒内判定：本场是值得重点精剪的“神回场”，还是平淡摸鱼/忘开麦的废片，
-    同时自动根据直播总时长计算出最省时省钱的 Step 2 推荐配置。
+    用于在 30 秒内判定素材人声动态与有效性，并结合总时长给出 Step 2 推荐配置。
     """
     duration = max(1.0, float(total_duration_sec or 0.0))
     thr = float(rms_threshold or 0.0)
@@ -768,27 +767,32 @@ def diagnose_stream_energy(
         rec_mode = "full"
         base_k = 10
         deep_k = 15
-        dur_hint = "30分钟以内短录像，推荐全量转写以免漏掉轻声金句"
+        dur_hint = "30分钟以内短录像，推荐全量转写以免漏掉轻声语句"
+        rec_reason_code = "full_short"
     elif duration <= 5400.0:
         rec_mode = "peaks"
         base_k = 15
         deep_k = 24
-        dur_hint = "0.5~1.5小时标准场，推荐抓 Top 15 峰值上下文"
+        dur_hint = "0.5~1.5小时标准场，推荐提取 Top 15 峰值上下文"
+        rec_reason_code = "peaks_default"
     elif duration <= 10800.0:
         rec_mode = "peaks"
         base_k = 24
         deep_k = 36
-        dur_hint = "1.5~3小时常规场，推荐抓 Top 24 峰值上下文"
+        dur_hint = "1.5~3小时常规场，推荐提取 Top 24 峰值上下文"
+        rec_reason_code = "peaks_default"
     elif duration <= 18000.0:
         rec_mode = "peaks"
         base_k = 25
         deep_k = 40
-        dur_hint = "3~5小时长直播，日更抓 Top 25 即可，深挖可调到 40"
+        dur_hint = "3~5小时长录像，常规提取 Top 25 即可，深度扫描可调至 40"
+        rec_reason_code = "peaks_default"
     else:
         rec_mode = "peaks"
         base_k = min(60, max(30, round(hours * 8)))
         deep_k = min(80, max(45, round(hours * 11)))
-        dur_hint = f"{hours:.1f}小时超长马拉松场，按每小时约 8 个锚点提取"
+        dur_hint = f"{hours:.1f}小时长录像，按每小时约 8 个峰值点提取"
+        rec_reason_code = "peaks_default"
 
     if not peak_segments or thr <= 0.0:
         bucket_size = 600.0 if duration <= 3600.0 else 3600.0
@@ -807,8 +811,8 @@ def diagnose_stream_energy(
         ]
         return {
             "grade": "WARN",
-            "grade_label": "异常·静音或无有效动态",
-            "advice": "未检测到有效高音量波动或音轨近乎静音，疑似忘开麦或黑屏挂机，请先试听原片再决定是否跑 AI。",
+            "grade_label": "警告 · 信号偏低或近似静音",
+            "advice": "未检测到有效高音量波动或音轨近似静音，可能未录制人声或处于静默状态，建议先试听原片确认后再执行分析。",
             "burst_ratio": 0.0,
             "max_burst_ratio": 0.0,
             "max_peak_rms": 0.0,
@@ -825,6 +829,7 @@ def diagnose_stream_energy(
                 "deep_top_k_peaks": int(deep_k),
                 "top_percent": 15.0,
                 "reason": dur_hint,
+                "reason_code": rec_reason_code,
             },
         }
 
@@ -840,33 +845,35 @@ def diagnose_stream_energy(
     strong_peak_count = len(strong_segs)
     strong_peaks_per_hour = round(strong_peak_count / max(hours, 0.1), 1)
 
-    # 3. 判定直播状态等级
+    # 3. 判定音频动态状态等级
     if thr < 0.015 or burst_ratio < 1.6:
         grade = "WARN"
-        grade_label = "异常·静音或动态过平"
-        advice = "音量均值偏低或起伏极弱（疑似未录进人声或整场平淡挂机），建议先点击预览抽听几处再跑大模型。"
+        grade_label = "警告 · 信号偏低或近似静音"
+        advice = "音量均值偏低或动态起伏较弱（可能未录进人声或整场较为平淡），建议先试听几处片段后再执行转写。"
     elif burst_ratio >= 3.2 or (burst_ratio >= 2.8 and strong_peaks_per_hour >= 8.0):
         grade = "S"
-        grade_label = "S级·神回爆点场"
-        advice = "情绪爆发极具张力且强高光密集！闭眼重点精剪，可适当拉大提取高峰多产几条短视频。"
+        grade_label = "S · 高动态爆发场"
+        advice = "高爆发峰值密集且人声动态充足，建议提取 8–12 个候选片段。"
     elif burst_ratio >= 2.4:
         grade = "A"
-        grade_label = "A级·常规优质场"
-        advice = "音频情绪起伏健康，高光分布正常，按右侧推荐峰值运行即可稳定出片。"
+        grade_label = "A · 标准动态场"
+        advice = "音频动态起伏健康，峰值分布均衡，按右侧推荐峰值参数运行即可稳定输出。"
     else:
         grade = "B"
-        grade_label = "B级·平淡或压限场"
-        advice = "爆发力偏柔和，可能是聊天局或 OBS 开启了强力防炸麦限幅；建议调高提取高峰或直接全量转写。"
+        grade_label = "B · 低动态或压限场"
+        advice = "整体爆发力偏柔和，可能是聊天内容或开启了防爆音限幅；建议适当提高提取峰值数或改用全量转写。"
 
-    # 若为 B 级平淡/限幅场，自动将推荐模式向深挖/全量倾斜以免漏掉口播梗
+    # 若为 B 级低动态/压限场，自动将推荐模式向深挖/全量倾斜以免漏掉轻声内容
     if grade == "B":
         if duration < 7200.0:
             rec_mode = "full"
-            dur_hint = "本场动态偏平且在2小时内，已切换推荐全量转写以防漏掉轻声金句"
+            dur_hint = "本场动态偏平且时长在 2 小时内，已切换推荐全量转写以免遗漏轻声片段"
+            rec_reason_code = "flat_full"
         else:
             base_k = min(60, round(base_k * 1.4))
             deep_k = min(80, round(deep_k * 1.4))
-            dur_hint = "本场动态偏平，已将推荐高峰数自动上浮 40% 以扩大捞梗范围"
+            dur_hint = "本场动态偏平，已将推荐峰值数上浮 40% 以扩大检索范围"
+            rec_reason_code = "flat_expand"
 
     # 4. 计算分段/分小时热度柱状图
     bucket_size = 600.0 if duration <= 3600.0 else 3600.0
@@ -925,6 +932,7 @@ def diagnose_stream_energy(
             "deep_top_k_peaks": int(deep_k),
             "top_percent": 15.0,
             "reason": dur_hint,
+            "reason_code": rec_reason_code,
         },
     }
 

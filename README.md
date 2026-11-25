@@ -165,7 +165,7 @@ Yes. Multi-track waveform inspection, <code>&gt;=15s</code> dead-air skipping, O
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 
 # Verify portable release SHA-256 checksum on Windows PowerShell
-Get-FileHash .\Solacut-v0.9.3-beta-win64-portable.zip -Algorithm SHA256
+Get-FileHash .\Solacut-v0.9.4-beta-win64-portable.zip -Algorithm SHA256
 ```
 
 ## License

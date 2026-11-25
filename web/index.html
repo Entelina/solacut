@@ -18,12 +18,20 @@
       const resolvedLang = langMap[savedLang] ? savedLang : "en";
       document.documentElement.lang = langMap[resolvedLang];
       document.documentElement.dataset.uiLang = resolvedLang;
+      const savedScale = String(localStorage.getItem("solacut_ui_scale") || "100").trim();
+      const scalePct = ["90", "100", "110", "125"].includes(savedScale) ? Number(savedScale) : 100;
+      const zoomRatio = scalePct / 100;
+      document.documentElement.style.setProperty("--ui-zoom", String(zoomRatio));
+      if (scalePct !== 100) {
+        document.documentElement.style.zoom = String(zoomRatio);
+      }
+      document.documentElement.dataset.uiScale = String(scalePct);
     } catch (e) {}
   </script>
   <title>Solacut</title>
   <link rel="icon" type="image/x-icon" href="/static/brand/favicon.ico">
   <link rel="icon" type="image/png" sizes="128x128" href="/static/brand/logo.png">
-  <link rel="stylesheet" href="/static/styles.css?v=v092">
+  <link rel="stylesheet" href="/static/styles.css?v=v094">
 </head>
 <body>
   <!-- 原生无边框桌面窗口 8 向隐形缩放热区 -->
@@ -766,7 +774,7 @@
     <!-- 面板 4b：全片逐字稿文本剪辑面板 (transcript · 检索跳画 + 选中句段零 AI 建片段) -->
     <section id="pane-transcript" class="nle-pane pane-transcript">
       <div class="pane-toolbar">
-        <div class="toolbar-cluster min-w-0" style="flex:1 1 0%;">
+        <div class="toolbar-cluster min-w-0 grow-1">
           <input id="transcript-search-input" class="nle-search-input" type="search" data-i18n-placeholder="tr.searchPlaceholder" data-i18n-aria="tr.searchAria" placeholder="Search full transcript..." aria-label="Search full transcript">
           <span id="transcript-count-badge" class="nle-badge mono-num" data-i18n-title="tr.countTitle" title="Matched / Total lines">0</span>
           <button type="button" id="btn-transcript-clear-search" class="nle-icon-btn hidden" data-i18n-title="tr.clearSearch" data-i18n-aria="tr.clearSearch" title="Clear search" aria-label="Clear search">
@@ -1152,6 +1160,9 @@
         </div>
 
         <div class="nle-action-stack">
+          <div id="export-only-reviewed-hint" class="export-lang-hint is-mismatch hidden" data-i18n="insp.export.onlyReviewedZeroHint">
+            Only Reviewed is enabled, but 0 selected clips are marked Reviewed. Press R on reviewed clips or uncheck Only Reviewed above.
+          </div>
           <button type="button" id="btn-export-selected" class="nle-btn-primary">Export Selected (0)</button>
           <button type="button" id="btn-open-clips-dir" class="nle-btn-secondary" data-i18n="insp.export.openOutDir">Open Output Folder</button>
         </div>
@@ -1170,7 +1181,7 @@
             <span id="corpus-stats-badge" class="nle-badge mono-num">...</span>
           </div>
           <div id="corpus-stats-detail" class="corpus-detail mono-num" data-i18n="common.loading">Loading...</div>
-          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+          <div class="corpus-actions-row">
             <button type="button" id="btn-expand-corpus" class="nle-btn-xs" data-i18n="insp.glossary.expandBtn" data-i18n-title="insp.glossary.expandTitle" title="Download & index 600K film/TED colloquial parallel corpus locally">Expand 600K Pack</button>
           </div>
         </div>
@@ -1219,7 +1230,7 @@
         <span id="task-progress-label" class="nle-badge mono-num">0%</span>
       </div>
       <div class="progress-track">
-        <div id="task-progress-fill" class="progress-fill" style="width: 0%;"></div>
+        <div id="task-progress-fill" class="progress-fill progress-init-w"></div>
       </div>
       <pre id="task-log-output" class="task-log-pre scroller mono-num" data-i18n="common.ready">Ready</pre>
     </section>
@@ -1419,16 +1430,27 @@
           </div>
         </div>
 
-        <div class="nle-field">
-          <label for="cfg-ui-lang" data-i18n="dlg.settings.uiLang">Interface Language</label>
-          <select id="cfg-ui-lang">
-            <option value="en" selected>English (EN)</option>
-            <option value="zh">简体中文 (ZH)</option>
-            <option value="ja">日本語 (JA)</option>
-            <option value="ko">한국어 (KO)</option>
-            <option value="ru">Русский (RU)</option>
-            <option value="es">Español (ES)</option>
-          </select>
+        <div class="nle-grid-2">
+          <div class="nle-field">
+            <label for="cfg-ui-lang" data-i18n="dlg.settings.uiLang">Interface Language</label>
+            <select id="cfg-ui-lang">
+              <option value="en" selected>English (EN)</option>
+              <option value="zh">简体中文 (ZH)</option>
+              <option value="ja">日本語 (JA)</option>
+              <option value="ko">한국어 (KO)</option>
+              <option value="ru">Русский (RU)</option>
+              <option value="es">Español (ES)</option>
+            </select>
+          </div>
+          <div class="nle-field">
+            <label for="cfg-ui-scale" data-i18n="dlg.cfg.uiScale">Interface Scale</label>
+            <select id="cfg-ui-scale">
+              <option value="90">90%</option>
+              <option value="100" selected>100%</option>
+              <option value="110">110%</option>
+              <option value="125">125%</option>
+            </select>
+          </div>
         </div>
 
         <div class="nle-field">
@@ -1547,7 +1569,7 @@
       </div>
       <div class="dialog-body scroller">
         <p id="retranslate-target-desc" class="dialog-desc"></p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <div class="dialog-grid-2">
           <div class="nle-field">
             <label for="retranslate-src-lang" data-i18n="insp.analyze.srcLang">Source</label>
             <select id="retranslate-src-lang">
@@ -1633,7 +1655,7 @@
             <div class="shortcut-row"><kbd>/</kbd> / <kbd>Alt</kbd>+<kbd>/</kbd><span data-i18n="dlg.shortcuts.s2_7">Replay active highlight from In point</span></div>
             <div class="shortcut-row"><kbd>↑</kbd> / <kbd>↓</kbd><span data-i18n="dlg.shortcuts.s2_8">Select previous / next highlight clip</span></div>
             <div class="shortcut-row"><kbd>Enter</kbd><span data-i18n="dlg.shortcuts.s2_9">Preview selected highlight clip</span></div>
-            <div class="shortcut-row"><kbd>S</kbd> / <kbd>D</kbd><span data-i18n="dlg.shortcuts.s2_10">Include / Exclude active clip for export</span></div>
+            <div class="shortcut-row"><kbd>D</kbd><span data-i18n="dlg.shortcuts.s2_10">Include / Exclude active clip for export</span></div>
             <div class="shortcut-row"><kbd>R</kbd><span data-i18n="dlg.shortcuts.s2_11">Toggle Reviewed / Draft status for active clip</span></div>
             <div class="shortcut-row"><kbd>Delete</kbd><span data-i18n="dlg.shortcuts.s2_12">Delete active highlight clip (undoable with Ctrl+Z)</span></div>
           </div>
@@ -1650,7 +1672,7 @@
 
           <div class="shortcut-sec">
             <div class="shortcut-sec-title" data-i18n="dlg.shortcuts.sec4">Subtitle Editing & Atomic Undo</div>
-            <div class="shortcut-row"><kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>\</kbd><span data-i18n="dlg.shortcuts.s4_1">Split subtitle line at playhead</span></div>
+            <div class="shortcut-row"><kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>\</kbd><span data-i18n="dlg.shortcuts.s4_1">Split subtitle line or active clip at playhead</span></div>
             <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>N</kbd><span data-i18n="dlg.shortcuts.s4_2">Insert new subtitle line at playhead</span></div>
             <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span data-i18n="dlg.shortcuts.s4_3">Find & replace subtitles / focus highlight search</span></div>
             <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Z</kbd><span data-i18n="dlg.shortcuts.s4_4">Undo last edit (100-step atomic stack)</span></div>
@@ -1668,7 +1690,8 @@
             <div class="shortcut-row"><kbd>F1</kbd><span data-i18n="dlg.shortcuts.s5_5">Open Built-in User Manual</span></div>
             <div class="shortcut-row"><kbd>?</kbd><span data-i18n="dlg.shortcuts.s5_6">Open Keyboard Shortcuts Reference</span></div>
             <div class="shortcut-row"><kbd>F11</kbd><span data-i18n="dlg.shortcuts.s5_7">Toggle borderless fullscreen window</span></div>
-            <div class="shortcut-row"><kbd>Esc</kbd><span data-i18n="dlg.shortcuts.s5_8">Exit Cinema Viewer / close search bar or dialog</span></div>
+            <div class="shortcut-row"><kbd>Esc</kbd><span data-i18n="dlg.shortcuts.s5_8">Exit fullscreen preview / close search bar or dialog</span></div>
+            <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>-</kbd> / <kbd>0</kbd><span data-i18n="dlg.shortcuts.s5_9">Zoom interface in / out / reset (90%–125%)</span></div>
           </div>
         </div>
       </div>
@@ -1681,7 +1704,7 @@
       <div class="dialog-header">
         <div class="toolbar-cluster">
           <h2 id="manual-dialog-title" data-i18n="dlg.manual.title">Solacut User Manual</h2>
-          <span class="nle-badge mono-num" data-i18n="dlg.manual.badge">v0.9.3 Beta · 100% Local</span>
+          <span class="nle-badge mono-num" data-i18n="dlg.manual.badge">v0.9.4 Beta · 100% Local</span>
         </div>
         <button type="submit" value="cancel" class="nle-icon-btn" data-i18n-aria="common.close" aria-label="Close">
           <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
@@ -1691,13 +1714,13 @@
       </div>
       <div class="manual-layout">
         <nav class="manual-nav scroller" id="manual-nav" data-i18n-aria="dlg.manual.navAria" aria-label="Manual Chapters">
-          <button type="button" class="manual-nav-btn active" data-manual-sec="quickstart" data-i18n="dlg.manual.nav1">01 · 3-Minute Quick Start</button>
-          <button type="button" class="manual-nav-btn" data-manual-sec="api" data-i18n="dlg.manual.nav2">02 · 3-Tier API & Local GPU</button>
-          <button type="button" class="manual-nav-btn" data-manual-sec="media" data-i18n="dlg.manual.nav3">03 · Media Bins & Multi-Track</button>
-          <button type="button" class="manual-nav-btn" data-manual-sec="multilang" data-i18n="dlg.manual.nav4">04 · 6-Lang Translation & Glossary</button>
-          <button type="button" class="manual-nav-btn" data-manual-sec="nle" data-i18n="dlg.manual.nav5">05 · Darkroom Review & Trimming</button>
-          <button type="button" class="manual-nav-btn" data-manual-sec="export" data-i18n="dlg.manual.nav6">06 · Lossless / EDL / 9:16 Vertical</button>
-          <button type="button" class="manual-nav-btn" data-manual-sec="faq" data-i18n="dlg.manual.nav7">07 · FAQ & Local Security</button>
+          <button type="button" class="manual-nav-btn active" data-manual-sec="quickstart" data-i18n="dlg.manual.nav1">Quick Start</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="api" data-i18n="dlg.manual.nav2">Model Routing &amp; GPU</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="media" data-i18n="dlg.manual.nav3">Media Bins &amp; Tracks</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="multilang" data-i18n="dlg.manual.nav4">Subtitles &amp; Glossary</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="nle" data-i18n="dlg.manual.nav5">Clip Review &amp; Trim</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="export" data-i18n="dlg.manual.nav6">Export &amp; Vertical</button>
+          <button type="button" class="manual-nav-btn" data-manual-sec="faq" data-i18n="dlg.manual.nav7">FAQ &amp; Privacy</button>
         </nav>
         <div class="manual-content scroller" id="manual-content">
           <article class="manual-section" data-manual-panel="quickstart" data-i18n-html="dlg.manual.sec1Html"></article>
@@ -1709,7 +1732,7 @@
           <article class="manual-section hidden" data-manual-panel="faq" data-i18n-html="dlg.manual.sec7Html"></article>
         </div>
       </div>
-      <div class="dialog-footer" style="justify-content:space-between;">
+      <div class="dialog-footer dialog-footer-between">
         <div class="toolbar-cluster">
           <button type="button" id="btn-manual-load-demo" class="nle-btn-sm" data-i18n="dlg.manual.btnLoadDemo">Load 30s Demo Project</button>
           <button type="button" id="btn-manual-open-shortcuts" class="nle-btn-sm" data-i18n="dlg.manual.btnShortcuts">Keyboard Shortcuts (?)</button>
@@ -1721,7 +1744,7 @@
 
   <!-- 媒体池新建 / 编辑虚拟文件夹（素材箱）弹窗 -->
   <dialog id="media-bin-dialog" closedby="any" aria-labelledby="media-bin-dialog-title">
-    <form method="dialog" id="media-bin-form" class="dialog-inner" style="width:380px;max-width:92vw;">
+    <form method="dialog" id="media-bin-form" class="dialog-inner dialog-inner-380">
       <div class="dialog-header">
         <h2 id="media-bin-dialog-title" data-i18n="dlg.bin.titleNew">New Folder</h2>
         <button type="submit" value="cancel" class="nle-icon-btn" data-i18n-aria="common.close" aria-label="Close">
@@ -1735,7 +1758,7 @@
           <label for="media-bin-name-input" data-i18n="dlg.bin.nameLabel">Folder Name (virtual Bin only — does not move files on disk)</label>
           <input id="media-bin-name-input" type="text" maxlength="40" data-i18n-placeholder="dlg.bin.namePlaceholder" placeholder="e.g. Ranked VODs / Boss Fights / To Review" autocomplete="off">
         </div>
-        <div class="nle-field" style="margin-top:10px;">
+        <div class="nle-field mt-10">
           <label data-i18n="dlg.bin.colorLabel">Folder Color</label>
           <div class="bin-color-picker" id="media-bin-color-picker" role="radiogroup" data-i18n-aria="dlg.bin.colorLabel" aria-label="Folder Color">
             <button type="button" class="bin-color-dot active" data-bin-color="#4f8ef7" style="--dot:#4f8ef7" data-i18n-title="dlg.bin.colorBlue" title="Titanium Blue"></button>
@@ -1771,7 +1794,7 @@
       <div id="context-dialog-body" class="dialog-body context-body scroller">
         <div class="empty-hint" data-i18n="common.loading">Loading...</div>
       </div>
-      <div class="dialog-footer" style="justify-content:space-between;">
+      <div class="dialog-footer dialog-footer-between">
         <span id="context-dialog-hint" class="muted-label" data-i18n="dlg.context.hint">Click any line to jump the monitor playhead · Amber marks active clip</span>
         <button type="submit" value="cancel" class="nle-btn-sm primary-subtle" autofocus data-i18n="common.close">Close</button>
       </div>
@@ -1780,7 +1803,7 @@
 
   <!-- 关于 Solacut 弹窗 -->
   <dialog id="about-dialog" closedby="any" aria-labelledby="about-dialog-title">
-    <form method="dialog" class="dialog-inner" style="width:430px;max-width:92vw;">
+    <form method="dialog" class="dialog-inner dialog-inner-430">
       <div class="dialog-header">
         <h2 id="about-dialog-title" data-i18n="dlg.about.title">About Solacut</h2>
         <button type="submit" value="cancel" class="nle-icon-btn" data-i18n-aria="common.close" aria-label="Close">
@@ -1789,15 +1812,15 @@
           </svg>
         </button>
       </div>
-      <div class="dialog-body">
+      <div class="dialog-body about-body-gap">
         <div class="about-hero">
           <img src="/static/brand/logo.png" alt="Solacut" width="44" height="44" class="about-logo">
           <div>
-            <div class="about-title">Solacut <span class="nle-badge mono-num">v0.9.3 Beta</span></div>
-            <div class="about-sub" data-i18n="dlg.about.subtitle">Local-first NLE game highlight clipper & 6-language native subtitle studio</div>
+            <div class="about-title">Solacut <span class="nle-badge mono-num">v0.9.4 Beta</span></div>
+            <div class="about-sub" data-i18n="dlg.about.subtitle">Local VOD highlight reviewer &amp; 6-language subtitle editor</div>
           </div>
         </div>
-        <ul class="manual-list" style="margin-top:12px;" data-i18n-html="dlg.about.listHtml"></ul>
+        <ul class="manual-list mt-12" data-i18n-html="dlg.about.listHtml"></ul>
       </div>
       <div class="dialog-footer">
         <button type="submit" value="cancel" class="nle-btn-sm primary-subtle" data-i18n="common.close">Close</button>
@@ -1807,7 +1830,7 @@
 
   <!-- 首次启动快速填 Key / 体验示例工程引导模态框 -->
   <dialog id="onboarding-dialog" closedby="any" aria-labelledby="onboarding-dialog-title">
-    <form method="dialog" id="onboarding-form" class="dialog-inner" style="width:460px;max-width:92vw;">
+    <form method="dialog" id="onboarding-form" class="dialog-inner dialog-inner-460">
       <div class="dialog-header">
         <h2 id="onboarding-dialog-title" data-i18n="dlg.onboarding.title">Solacut Quick Start</h2>
         <button type="submit" value="cancel" class="nle-icon-btn" data-i18n-aria="common.close" aria-label="Close">
@@ -1833,19 +1856,40 @@
           <input id="onboarding-api-key" type="password" placeholder="sk-..." autocomplete="off">
         </div>
       </div>
-      <div class="dialog-footer" style="justify-content:space-between;">
+      <div class="dialog-footer dialog-footer-between">
         <button type="button" id="btn-onboarding-demo" class="nle-btn-sm" data-i18n="dlg.onboarding.tryDemo">Try 30s Demo</button>
-        <div style="display:flex;gap:6px;">
+        <div class="row-flex-wrap">
           <button type="submit" value="cancel" id="btn-onboarding-skip" class="nle-btn-sm" data-i18n="dlg.onboarding.skip">Later</button>
-          <button type="button" id="btn-onboarding-save" class="nle-btn-sm primary-subtle" data-i18n="dlg.onboarding.saveStart">Save & Start</button>
+          <button type="button" id="btn-onboarding-save" class="nle-btn-sm primary-subtle" data-i18n="dlg.onboarding.saveStart">Save &amp; Start</button>
         </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 暗房原生风格二次确认模态框（替代白色系统 window.confirm） -->
+  <dialog id="confirm-dialog" class="confirm-dialog" closedby="any" aria-labelledby="confirm-dialog-title">
+    <form method="dialog" class="dialog-inner">
+      <div class="dialog-header">
+        <h2 id="confirm-dialog-title" data-i18n="dlg.confirm.title">Confirm Action</h2>
+        <button type="submit" value="cancel" class="nle-icon-btn" data-i18n-aria="common.close" aria-label="Close">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
+            <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <p id="confirm-dialog-message" class="confirm-message"></p>
+      </div>
+      <div class="dialog-footer">
+        <button type="submit" value="cancel" id="confirm-dialog-cancel" class="nle-btn-sm" data-i18n="common.cancel">Cancel</button>
+        <button type="submit" value="confirm" id="confirm-dialog-ok" class="nle-btn-sm nle-btn-danger-solid" autofocus data-i18n="common.confirm">Confirm</button>
       </div>
     </form>
   </dialog>
 
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script src="/static/i18n.js?v=v092"></script>
-  <script src="/static/app.js?v=v092" type="module"></script>
+  <script src="/static/i18n.js?v=v094"></script>
+  <script src="/static/app.js?v=v094" type="module"></script>
 </body>
 </html>

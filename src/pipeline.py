@@ -229,6 +229,7 @@ def scan_input_videos(
         peaks_json = out_root / f"{stem}_audio_peaks.json"
         transcript_json = out_root / f"{stem}_transcript.json"
         highlights_json = out_root / f"{stem}_highlights.json"
+        wav_path = out_root / f"{stem}_16k.wav"
         clips_dir = out_root / f"{stem}_clips"
         clips_manifest = clips_dir / f"{stem}_clips_manifest.json"
 
@@ -296,6 +297,12 @@ def scan_input_videos(
             or 0.0
         )
         diagnostics = get_or_compute_diagnostics(peaks_data)
+        v_stat = vpath.stat()
+        video_mtime_ns = int(v_stat.st_mtime_ns)
+        video_size = int(v_stat.st_size)
+        wav_mtime_ns = int(wav_path.stat().st_mtime_ns) if wav_path.is_file() else 0
+        hl_mtime_ns = int(highlights_json.stat().st_mtime_ns) if (has_highlights and highlights_json.is_file()) else 0
+        cache_token = f"{video_mtime_ns}_{video_size}_{wav_mtime_ns}"
 
         results.append(
             {
@@ -303,7 +310,12 @@ def scan_input_videos(
                 "filename": vpath.name,
                 "rel_path": rel_path,
                 "video_path": str(vpath.resolve()),
-                "size_mb": round(vpath.stat().st_size / (1024.0 * 1024.0), 1),
+                "size_mb": round(video_size / (1024.0 * 1024.0), 1),
+                "video_mtime_ns": video_mtime_ns,
+                "video_size": video_size,
+                "wav_mtime_ns": wav_mtime_ns,
+                "hl_mtime_ns": hl_mtime_ns,
+                "cache_token": cache_token,
                 "stage": stage,
                 "stage_label": stage_label,
                 "has_peaks": has_peaks,

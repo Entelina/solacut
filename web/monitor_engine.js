@@ -185,16 +185,18 @@ class StereoAudioMeter {
 
     const rect = canvas.getBoundingClientRect();
     if (rect.width < 4 || rect.height < 20) return;
-    const w = Math.round(rect.width);
-    const h = Math.round(rect.height);
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(1, canvas.clientWidth || Math.round(rect.width));
+    const h = Math.max(1, canvas.clientHeight || Math.round(rect.height));
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const physW = Math.max(1, Math.round(rect.width * dpr));
+    const physH = Math.max(1, Math.round(rect.height * dpr));
 
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
+    if (canvas.width !== physW || canvas.height !== physH) {
+      canvas.width = physW;
+      canvas.height = physH;
     }
 
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(physW / w, 0, 0, physH / h, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = "#0e0e10";
     ctx.fillRect(0, 0, w, h);
@@ -202,7 +204,7 @@ class StereoAudioMeter {
     const padX = 4;
     const clipH = 5;
     const topY = 4 + clipH + 3;
-    const bottomPad = 14;
+    const bottomPad = 16;
     const meterH = Math.max(24, h - topY - bottomPad);
     const gap = 2;
     const barW = Math.max(4, Math.floor((w - padX * 2 - gap) / 2));
@@ -256,11 +258,11 @@ class StereoAudioMeter {
     }
 
     // 底部 L / R 标识
-    ctx.fillStyle = "#6b6b74";
-    ctx.font = '600 9px "Cascadia Mono", Consolas, monospace';
+    ctx.fillStyle = "#989ca6";
+    ctx.font = '600 11px "Cascadia Mono", Consolas, monospace';
     ctx.textAlign = "center";
-    ctx.fillText("L", xL + barW / 2, h - 3);
-    ctx.fillText("R", xR + barW / 2, h - 3);
+    ctx.fillText("L", Math.round(xL + barW / 2), h - 3);
+    ctx.fillText("R", Math.round(xR + barW / 2), h - 3);
   }
 }
 
@@ -369,16 +371,18 @@ class ClipMiniScrubber {
     const r = canvas.getBoundingClientRect();
     // 修复 P2-06：面板隐藏（0×0）时跳过离屏重分配
     if (r.width < 10 || r.height < 8) return;
-    const w = Math.round(r.width);
-    const h = Math.round(r.height);
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(1, canvas.clientWidth || Math.round(r.width));
+    const h = Math.max(1, canvas.clientHeight || Math.round(r.height));
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const physW = Math.max(1, Math.round(r.width * dpr));
+    const physH = Math.max(1, Math.round(r.height * dpr));
 
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
+    if (canvas.width !== physW || canvas.height !== physH) {
+      canvas.width = physW;
+      canvas.height = physH;
     }
 
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(physW / w, 0, 0, physH / h, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
     // 凹槽底色
@@ -405,11 +409,11 @@ class ClipMiniScrubber {
     if (this.clipStart !== null && this.clipEnd !== null) {
       const x1 = Math.max(0, this._timeToX(this.clipStart, w));
       const x2 = Math.min(w, this._timeToX(this.clipEnd, w));
-      ctx.fillStyle = "rgba(217, 155, 56, 0.16)";
+      ctx.fillStyle = "#2c2418";
       ctx.fillRect(x1, trackY, Math.max(2, x2 - x1), trackH);
 
       // 本段每句字幕分布微块
-      ctx.fillStyle = "rgba(180, 196, 220, 0.34)";
+      ctx.fillStyle = "#687890";
       for (const s of this.subtitles) {
         const sx1 = Math.max(0, this._timeToX(Number(s.start_sec) || 0, w));
         const sx2 = Math.min(w, this._timeToX(Number(s.end_sec) || 0, w));
@@ -728,22 +732,24 @@ export class ProgramMonitorEngine {
     }
 
     const fr = this.frameEl.getBoundingClientRect();
-    if (fr.width < 10 || fr.height < 10) return;
+    const frameW = this.frameEl.clientWidth || fr.width;
+    const frameH = this.frameEl.clientHeight || fr.height;
+    if (frameW < 10 || frameH < 10) return;
     const vw = this.videoEl.videoWidth || 1920;
     const vh = this.videoEl.videoHeight || 1080;
-    const containerRatio = fr.width / Math.max(1, fr.height);
+    const containerRatio = frameW / Math.max(1, frameH);
     const videoRatio = vw / Math.max(1, vh);
 
-    let drawW = fr.width;
-    let drawH = fr.height;
+    let drawW = frameW;
+    let drawH = frameH;
     if (videoRatio > containerRatio) {
-      drawH = fr.width / videoRatio;
+      drawH = frameW / videoRatio;
     } else {
-      drawW = fr.height * videoRatio;
+      drawW = frameH * videoRatio;
     }
 
     // 修复 P1-04：同步乘入当前监看缩放倍率，确保 50% / 100%原生 / 150% 下安全框与真实画面严丝合缝
-    const zoomScale = this._computeZoomScale(fr, drawW, drawH);
+    const zoomScale = this._computeZoomScale({ width: frameW, height: frameH }, drawW, drawH);
     const scaledW = drawW * zoomScale;
     const scaledH = drawH * zoomScale;
 
@@ -763,8 +769,8 @@ export class ProgramMonitorEngine {
       cropH = scaledH * 0.9;
     }
 
-    const offsetX = (fr.width - cropW) / 2;
-    const offsetY = (fr.height - cropH) / 2;
+    const offsetX = (frameW - cropW) / 2;
+    const offsetY = (frameH - cropH) / 2;
 
     this.safeGuideEl.dataset.mode = this.safeMode;
     this.safeGuideEl.style.setProperty("--crop-x", `${Math.round(offsetX)}px`);
@@ -780,8 +786,8 @@ export class ProgramMonitorEngine {
     if (subOverlay) {
       if (this.showSafe916 && ["9:16", "4:5", "1:1"].includes(this.safeMode)) {
         subOverlay.style.left = `${Math.round(Math.max(0, offsetX) + 6)}px`;
-        subOverlay.style.right = `${Math.round(Math.max(0, fr.width - (offsetX + cropW)) + 6)}px`;
-        subOverlay.style.bottom = `${Math.round(Math.max(12, fr.height - (offsetY + cropH) + cropH * 0.14))}px`;
+        subOverlay.style.right = `${Math.round(Math.max(0, frameW - (offsetX + cropW)) + 6)}px`;
+        subOverlay.style.bottom = `${Math.round(Math.max(12, frameH - (offsetY + cropH) + cropH * 0.14))}px`;
       } else {
         subOverlay.style.left = "";
         subOverlay.style.right = "";
@@ -796,7 +802,7 @@ export class ProgramMonitorEngine {
     if (this.zoomMode === "150") return 1.5;
     if (this.zoomMode === "100") {
       // 修复 P1-04：100% 代表按视频原生像素 1:1 显示（与 Fit 区分开）
-      const rect = fr || this.frameEl?.getBoundingClientRect();
+      const rect = fr || (this.frameEl ? { width: this.frameEl.clientWidth, height: this.frameEl.clientHeight } : null);
       const vw = this.videoEl?.videoWidth || 0;
       const vh = this.videoEl?.videoHeight || 0;
       if (rect && vw > 0 && vh > 0 && rect.width > 10 && rect.height > 10) {

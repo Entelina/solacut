@@ -14,7 +14,7 @@
     python scripts/build_release.py --stage-only
 
     # 2. 完整编译 Windows 免 Python 一键便携包（需 .venv 已装 pyinstaller，默认自动注入品牌图标）
-    python scripts/build_release.py --version v0.9.2-beta
+    python scripts/build_release.py --version v0.9.4-beta
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ _FORBIDDEN_FILENAMES: frozenset[str] = frozenset(
         ".env",
         ".workbench_config.json",
         ".media_bins.json",
+        ".window_state.json",
         ".desktop_runtime.log",
         ".desktop_crash.log",
         "id_rsa",
@@ -417,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(description="Solacut 安全发布与 Windows 免 Python 便携包构建器")
-    parser.add_argument("--version", default="v0.9.2-beta", help="发布版本号（默认 v0.9.2-beta）")
+    parser.add_argument("--version", default="v0.9.4-beta", help="发布版本号（默认 v0.9.4-beta）")
     parser.add_argument("--out-root", default=str(PROJECT_ROOT / "release"), help="发布产物输出根目录")
     parser.add_argument(
         "--icon",
